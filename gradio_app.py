@@ -189,6 +189,7 @@ def _run_generation(
     speaker_kv_scale_raw: str,
     speaker_kv_min_t_raw: str,
     speaker_kv_max_layers_raw: str,
+    output_dir: str,
 ) -> tuple[object, ...]:
     def stdout_log(msg: str) -> None:
         print(msg, flush=True)
@@ -278,7 +279,7 @@ def _run_generation(
         log_fn=stdout_log,
     )
 
-    out_dir = Path("gradio_outputs")
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     out_paths: list[str] = []
@@ -316,8 +317,9 @@ def _clear_runtime_cache() -> str:
     return "cleared loaded model from memory"
 
 
-def build_ui() -> gr.Blocks:
-    default_checkpoint = _default_checkpoint()
+def build_ui(args: argparse.Namespace) -> gr.Blocks:
+    default_checkpoint = args.checkpoint if args.checkpoint else _default_checkpoint()
+    default_output_dir = args.output_dir
     default_model_device = _default_model_device()
     default_codec_device = _default_codec_device()
     device_choices = list_available_runtime_devices()
@@ -448,6 +450,8 @@ def build_ui() -> gr.Blocks:
         out_log = gr.Textbox(label="Run Log", lines=8)
         out_timing = gr.Textbox(label="Timing", lines=8)
 
+        output_dir = gr.State(value=default_output_dir)
+
         generate_btn.click(
             _run_generation,
             inputs=[
@@ -475,6 +479,7 @@ def build_ui() -> gr.Blocks:
                 speaker_kv_scale_raw,
                 speaker_kv_min_t_raw,
                 speaker_kv_max_layers_raw,
+                output_dir,
             ],
             outputs=[*out_audios, out_log, out_timing],
         )
@@ -504,19 +509,23 @@ def build_ui() -> gr.Blocks:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gradio app for Irodori-TTS with cached runtime.")
+    parser.add_argument("--checkpoint", default=None, help="model path (.pt/.safetensors)")
+    parser.add_argument("--output-dir", default="gradio_outputs", help="output directory (default: gradio_outputs)")
     parser.add_argument("--server-name", default="127.0.0.1")
     parser.add_argument("--server-port", type=int, default=7860)
     parser.add_argument("--share", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    demo = build_ui()
+    demo = build_ui(args)
     demo.queue(default_concurrency_limit=1)
+    allowed_paths = [args.output_dir]
     demo.launch(
         server_name=args.server_name,
         server_port=args.server_port,
         share=bool(args.share),
         debug=bool(args.debug),
+        allowed_paths=allowed_paths,
     )
 
 
