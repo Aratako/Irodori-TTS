@@ -7,10 +7,15 @@ from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
+from irodori_tts.platform import auto_enable_mps_fallback
+
+_AUTO_ENABLED_MPS_FALLBACK = auto_enable_mps_fallback()
+
 from irodori_tts.inference_runtime import (
     InferenceRuntime,
     RuntimeKey,
     SamplingRequest,
+    default_codec_runtime_device,
     default_runtime_device,
     resolve_cfg_scales,
     save_wav,
@@ -95,7 +100,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--codec-device",
-        default=default_runtime_device(),
+        default=default_codec_runtime_device(),
         help="Codec device for reference encode/decode (e.g. cuda, mps, cpu).",
     )
     parser.add_argument(
@@ -304,6 +309,12 @@ def main() -> None:
         "--no-ref", action="store_true", help="Run without speaker reference conditioning."
     )
     args = parser.parse_args()
+
+    if _AUTO_ENABLED_MPS_FALLBACK:
+        print(
+            "[runtime] enabled PYTORCH_ENABLE_MPS_FALLBACK=1 for macOS compatibility.",
+            flush=True,
+        )
 
     cfg_scale_text, cfg_scale_speaker, scale_messages = resolve_cfg_scales(
         cfg_guidance_mode=str(args.cfg_guidance_mode),
