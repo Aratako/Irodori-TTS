@@ -8,10 +8,15 @@ from pathlib import Path
 import gradio as gr
 from huggingface_hub import hf_hub_download
 
+from irodori_tts.platform import auto_enable_mps_fallback
+
+_AUTO_ENABLED_MPS_FALLBACK = auto_enable_mps_fallback()
+
 from irodori_tts.inference_runtime import (
     RuntimeKey,
     SamplingRequest,
     clear_cached_runtime,
+    default_codec_runtime_device,
     default_runtime_device,
     get_cached_runtime,
     list_available_runtime_devices,
@@ -41,7 +46,7 @@ def _default_model_device() -> str:
 
 
 def _default_codec_device() -> str:
-    return default_runtime_device()
+    return default_codec_runtime_device()
 
 
 def _precision_choices_for_device(device: str) -> list[str]:
@@ -329,6 +334,10 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             "When settings are unchanged, runtime is reused and only sampling/decoding runs."
         )
+        if _AUTO_ENABLED_MPS_FALLBACK:
+            gr.Markdown(
+                "macOS detected: enabled `PYTORCH_ENABLE_MPS_FALLBACK=1` and defaulted the codec to CPU for safer MPS execution."
+            )
 
         with gr.Row():
             checkpoint = gr.Textbox(

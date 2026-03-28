@@ -19,6 +19,7 @@ from .codec import DACVAECodec, patchify_latent, unpatchify_latent
 from .config import ModelConfig
 from .lora import checkpoint_state_uses_lora
 from .model import TextToLatentRFDiT
+from .platform import default_codec_device_for_runtime
 from .rf import sample_euler_rf_cfg
 from .text_normalization import normalize_text
 from .tokenizer import PretrainedTextTokenizer
@@ -60,6 +61,10 @@ def list_available_runtime_devices() -> list[str]:
 
 def default_runtime_device() -> str:
     return list_available_runtime_devices()[0]
+
+
+def default_codec_runtime_device() -> str:
+    return default_codec_device_for_runtime(default_runtime_device())
 
 
 def list_available_runtime_precisions(device: str | torch.device) -> list[str]:
@@ -218,6 +223,12 @@ def _maybe_compile_inference_model(
         return model
     if not hasattr(torch, "compile"):
         raise RuntimeError("compile_model=True requires torch.compile (PyTorch 2+).")
+    model_device = next(model.parameters()).device
+    if model_device.type == "mps":
+        raise RuntimeError(
+            "compile_model=True is currently not supported on MPS. "
+            "Disable --compile-model on macOS."
+        )
     compile_kwargs = {"dynamic": bool(dynamic)}
     model.encode_conditions = torch.compile(model.encode_conditions, **compile_kwargs)
     model.build_context_kv_cache = torch.compile(model.build_context_kv_cache, **compile_kwargs)

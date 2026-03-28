@@ -42,6 +42,13 @@ uv sync
 
 **Note**: For Linux/Windows with CUDA, PyTorch is automatically installed from the cu128 index. For macOS (MPS) or CPU-only usage, `uv sync` will install the default PyTorch build.
 
+### macOS Notes
+
+- Apple Silicon is supported through PyTorch MPS.
+- The CLI / Gradio app now automatically set `PYTORCH_ENABLE_MPS_FALLBACK=1` on macOS unless you already set it yourself.
+- On macOS, the default runtime is `model_device=mps` and `codec_device=cpu`. This keeps generation on MPS while avoiding common DACVAE / torchaudio MPS incompatibilities.
+- `--compile-model` is currently CUDA-only in practice. On macOS / MPS, leave it disabled.
+
 ## Quick Start
 
 ### Simple Inference
@@ -51,6 +58,18 @@ uv run python infer.py \
   --hf-checkpoint Aratako/Irodori-TTS-500M-v2 \
   --text "今日はいい天気ですね。" \
   --ref-wav path/to/reference.wav \
+  --output-wav outputs/sample.wav
+```
+
+macOS example with explicit devices:
+
+```bash
+uv run python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-500M-v2 \
+  --text "今日はいい天気ですね。" \
+  --ref-wav path/to/reference.wav \
+  --model-device mps \
+  --codec-device cpu \
   --output-wav outputs/sample.wav
 ```
 
@@ -112,11 +131,11 @@ uv run python infer.py \
 | `--cfg-scale-speaker` | 5.0 | CFG scale for speaker conditioning |
 | `--guidance-mode` | `independent` | CFG mode: `independent`, `joint`, `alternating` |
 | `--model-device` | auto | Device for model (`cuda`, `mps`, `cpu`) |
-| `--codec-device` | auto | Device for DACVAE codec |
+| `--codec-device` | auto (`cpu` on macOS/MPS) | Device for DACVAE codec |
 | `--model-precision` | auto | Model precision (`fp32`, `bf16`) |
 | `--codec-precision` | auto | Codec precision (`fp32`, `bf16`) |
 | `--seed` | random | Random seed for reproducibility |
-| `--compile-model` | False | Enable `torch.compile` for faster inference |
+| `--compile-model` | False | Enable `torch.compile` for faster inference (currently avoid on macOS / MPS) |
 | `--trim-tail` | True | Trim trailing silence via flattening heuristic |
 
 ## Training
