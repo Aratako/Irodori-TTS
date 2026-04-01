@@ -1,4 +1,7 @@
 dacvae @ git+https://github.com/facebookresearch/dacvae
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
 datasets>=3.0.0
 gradio>=5.0.0
 huggingface-hub>=0.34.0,<1.0
