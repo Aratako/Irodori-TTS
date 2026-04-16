@@ -950,7 +950,7 @@ def save_wav(path: str | Path, audio: torch.Tensor, sample_rate: int) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         torchaudio.save(str(out_path), audio, sample_rate)
-    except RuntimeError:
+    except (RuntimeError, ImportError):
         import soundfile as sf
 
         sf.write(str(out_path), audio.squeeze(0).numpy(), sample_rate)
