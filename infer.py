@@ -15,6 +15,7 @@ from irodori_tts.inference_runtime import (
     resolve_cfg_scales,
     save_wav,
 )
+from irodori_tts.waveex import WaveExConfig, available_wavelets, parse_ode_step_indices
 
 FIXED_SECONDS = 30.0
 
@@ -301,6 +302,60 @@ def main() -> None:
     parser.add_argument("--tail-std-threshold", type=float, default=0.05)
     parser.add_argument("--tail-mean-threshold", type=float, default=0.1)
     parser.add_argument(
+        "--waveex",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable WaveEx wavelet-guided extrapolation acceleration "
+            "(Liu et al., AAAI 2026). Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--waveex-ode-steps",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated step indices where the model is evaluated normally. "
+            "All other indices are predicted via wavelet-guided extrapolation. "
+            "Use 'auto' (default) to derive a schedule from the calibrated "
+            "default (0,1,2,5,10,20 at 40 NFE) rescaled to --num-steps."
+        ),
+    )
+    parser.add_argument(
+        "--waveex-wavelet",
+        choices=available_wavelets(),
+        default="haar",
+        help=(
+            "Wavelet basis used for the multi-scale decomposition. Default: haar "
+            "(longer wavelets like sym6 require larger --waveex-history-size to "
+            "avoid periodic-boundary distortion)."
+        ),
+    )
+    parser.add_argument(
+        "--waveex-taylor-order",
+        type=int,
+        choices=[1, 2],
+        default=1,
+        help="Order of Taylor extrapolation in each band. Default: 1 (paper).",
+    )
+    parser.add_argument(
+        "--waveex-history-size",
+        type=int,
+        default=2,
+        help=(
+            "Number of past latent states retained for the extrapolation window. "
+            "Default: 2 (uses direct Taylor on raw latents — empirically best on "
+            "the duration-control checkpoint; the wavelet path with haar + small "
+            "history is unstable). Set >= 4 to engage the wavelet decomposition."
+        ),
+    )
+    parser.add_argument(
+        "--waveex-high-freq-mode",
+        choices=["extrapolate", "freeze", "zero"],
+        default="extrapolate",
+        help="How to handle the high-frequency band during reconstruction.",
+    )
+    parser.add_argument(
         "--show-timings",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -361,6 +416,20 @@ def main() -> None:
     for msg in scale_messages:
         print(msg)
 
+    waveex_cfg: WaveExConfig | None = None
+    if bool(args.waveex):
+        waveex_cfg = WaveExConfig(
+            enabled=True,
+            ode_step_indices=parse_ode_step_indices(
+                args.waveex_ode_steps,
+                num_steps=int(args.num_steps),
+            ),
+            wavelet=str(args.waveex_wavelet),
+            taylor_order=int(args.waveex_taylor_order),
+            history_size=int(args.waveex_history_size),
+            high_freq_mode=str(args.waveex_high_freq_mode),
+        )
+
     result = runtime.synthesize(
         SamplingRequest(
             text=str(args.text),
@@ -406,6 +475,7 @@ def main() -> None:
             tail_window_size=int(args.tail_window_size),
             tail_std_threshold=float(args.tail_std_threshold),
             tail_mean_threshold=float(args.tail_mean_threshold),
+            waveex=waveex_cfg,
         ),
         log_fn=None,
     )

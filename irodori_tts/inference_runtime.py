@@ -22,6 +22,7 @@ from .model import TextToLatentRFDiT
 from .rf import sample_euler_rf_cfg
 from .text_normalization import normalize_text
 from .tokenizer import PretrainedTextTokenizer
+from .waveex import WaveExConfig
 
 
 def _is_mps_available() -> bool:
@@ -198,6 +199,7 @@ class SamplingRequest:
     tail_window_size: int = 20
     tail_std_threshold: float = 0.05
     tail_mean_threshold: float = 0.1
+    waveex: WaveExConfig | None = None
 
 
 @dataclass
@@ -812,9 +814,21 @@ class InferenceRuntime:
                 speaker_kv_scale=speaker_kv_scale,
                 speaker_kv_max_layers=speaker_kv_max_layers,
                 speaker_kv_min_t=speaker_kv_min_t,
+                waveex=req.waveex,
             )
             stage_sec = _measure_end(self.model_device, t0)
             stage_timings.append(("sample_rf", stage_sec))
+            if req.waveex is not None and req.waveex.enabled:
+                ode_indices = sorted(req.waveex.resolve_ode_step_indices(int(req.num_steps)))
+                msg = (
+                    f"info: waveex enabled (wavelet={req.waveex.wavelet}, "
+                    f"taylor_order={req.waveex.taylor_order}, "
+                    f"history_size={req.waveex.history_size}, "
+                    f"high_freq_mode={req.waveex.high_freq_mode}, "
+                    f"ode_steps={ode_indices})."
+                )
+                messages.append(msg)
+                _log(msg)
             _log(f"[runtime] sample_rf: {stage_sec * 1000.0:.1f} ms")
 
             t0 = _measure_start(self.model_device)

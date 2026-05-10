@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from .model import TextToLatentRFDiT
+from .waveex import WaveExBuffer, WaveExConfig
 
 
 def _make_rng(seed: int, device: torch.device) -> tuple[torch.Generator, torch.device]:
@@ -140,6 +141,7 @@ def sample_euler_rf_cfg(
     speaker_kv_scale: float | None = None,
     speaker_kv_max_layers: int | None = None,
     speaker_kv_min_t: float | None = None,
+    waveex: WaveExConfig | None = None,
 ) -> torch.Tensor:
     """
     Euler sampling over RF ODE with text/reference/caption conditioning CFG.
@@ -414,12 +416,60 @@ def sample_euler_rf_cfg(
             )
     speaker_kv_active = speaker_kv_scale is not None
 
+    waveex_cfg = waveex if (waveex is not None and waveex.enabled) else None
+    waveex_buffer: WaveExBuffer | None = None
+    waveex_ode_indices: set[int] = set()
+    waveex_min_history = 0
+    if waveex_cfg is not None:
+        waveex_buffer = WaveExBuffer(waveex_cfg)
+        # Note: do NOT seed the buffer with the initial pure-noise latent;
+        # only real ODE outputs should populate the history so the wavelet
+        # extrapolation operates on a proper trajectory.
+        waveex_ode_indices = waveex_cfg.resolve_ode_step_indices(num_steps)
+        waveex_min_history = max(2, int(waveex_cfg.history_size))
+
     for i in range(num_steps):
         t = t_schedule[i]
         t_next = t_schedule[i + 1]
         tt = torch.full((batch_size,), t, device=device, dtype=dtype)
 
         use_cfg = bool(enabled_cfg_names) and (cfg_min_t <= t.item() <= cfg_max_t)
+        is_full_ode_index = waveex_cfg is None or i in waveex_ode_indices
+        use_taylor_step = (
+            waveex_buffer is not None
+            and not is_full_ode_index
+            and len(waveex_buffer) >= waveex_min_history
+        )
+        if use_taylor_step:
+            x_t = waveex_buffer.predict_next()
+            waveex_buffer.push(x_t)
+            if (
+                speaker_kv_active
+                and speaker_kv_min_t is not None
+                and (t_next < speaker_kv_min_t)
+                and (t >= speaker_kv_min_t)
+            ):
+                inv_scale = 1.0 / float(speaker_kv_scale)
+                scale_speaker_kv_cache(
+                    context_kv_cache=context_kv_cond,
+                    scale=inv_scale,
+                    max_layers=speaker_kv_max_layers,
+                )
+                if context_kv_cfg is not None:
+                    scale_speaker_kv_cache(
+                        context_kv_cache=context_kv_cfg,
+                        scale=inv_scale,
+                        max_layers=speaker_kv_max_layers,
+                    )
+                for cache in context_kv_alternating.values():
+                    scale_speaker_kv_cache(
+                        context_kv_cache=cache,
+                        scale=inv_scale,
+                        max_layers=speaker_kv_max_layers,
+                    )
+                speaker_kv_active = False
+            continue
+
         if use_cfg:
             if use_independent_cfg:
                 x_t_cfg = torch.cat([x_t] * cfg_batch_mult, dim=0).to(dtype)
@@ -538,5 +588,7 @@ def sample_euler_rf_cfg(
             speaker_kv_active = False
 
         x_t = x_t + v * (t_next - t)
+        if waveex_buffer is not None:
+            waveex_buffer.push(x_t)
 
     return x_t
