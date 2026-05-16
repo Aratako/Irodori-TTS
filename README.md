@@ -58,6 +58,26 @@ uv sync
 
 **Note**: For Linux/Windows with CUDA, PyTorch is automatically installed from the cu128 index. For macOS (MPS) or CPU-only usage, `uv sync` will install the default PyTorch build.
 
+### AMD ROCm on Linux/WSL
+
+The default `uv sync` path keeps the existing CUDA 12.8 PyTorch setup. If you
+want to use AMD ROCm, create the environment first, then reinstall the PyTorch
+packages with uv's automatic PyTorch backend selection:
+
+```bash
+uv sync
+uv pip install --reinstall "torch>=2.10.0,<2.11.0" "torchaudio>=2.10.0,<2.11.0" --torch-backend=auto
+```
+
+`--torch-backend=auto` is currently available in uv's `uv pip` interface. It
+detects the local accelerator and selects the matching PyTorch index for
+PyTorch ecosystem packages; if no supported accelerator is found, uv falls back
+to the CPU-only index.
+
+Because the project lockfile still defaults to CUDA 12.8 on Linux/Windows, use
+`uv run --no-sync ...` after overriding the PyTorch backend so that uv does not
+replace the ROCm wheels with the locked CUDA wheels.
+
 ## Quick Start
 
 ### Simple Inference
