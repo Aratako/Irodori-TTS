@@ -762,7 +762,7 @@ class InferenceRuntime:
             return None, None
         if req.ref_wav is not None or req.ref_latent is not None or req.no_ref:
             raise ValueError(
-                "speaker_embedding cannot be combined with ref_wav/ref_latent/no_ref. "
+                "ref_embed/--ref-embed cannot be combined with ref_wav/ref_latent/no_ref. "
                 "Use exactly one speaker conditioning source."
             )
 
