@@ -1578,11 +1578,6 @@ dependencies = [
     { name = "wandb" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "ruff" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "ruff" },
@@ -1598,7 +1593,6 @@ requires-dist = [
     { name = "numba", specifier = ">=0.57.0" },
     { name = "peft", specifier = ">=0.18.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
     { name = "safetensors", specifier = ">=0.7.0" },
     { name = "sentencepiece", specifier = ">=0.1.99,<0.2" },
     { name = "silentcipher", git = "https://github.com/SesameAILabs/silentcipher.git?rev=d46d7d0893a583d8968ab3a6626e2289faec9152" },
@@ -1612,7 +1606,6 @@ requires-dist = [
     { name = "transformers", specifier = "<5" },
     { name = "wandb", specifier = ">=0.17.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15.2" }]

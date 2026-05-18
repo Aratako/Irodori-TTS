@@ -310,6 +310,16 @@ def main() -> None:
         help="Apply speaker KV scaling only to first N diffusion layers (default: all layers).",
     )
     parser.add_argument(
+        "--speaker-uncond-mode",
+        choices=["mask", "noise"],
+        default="mask",
+        help=(
+            "Unconditional speaker embedding formulation for speaker-conditioned checkpoints. "
+            "'mask': zero out the embedding (default, lower VRAM). "
+            "'noise': replace with Gaussian noise of the same stddev as the reference embedding."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -337,10 +347,22 @@ def main() -> None:
     )
     ref_group = parser.add_mutually_exclusive_group(required=False)
     ref_group.add_argument(
-        "--ref-wav", default=None, help="Reference waveform path for speaker conditioning."
+        "--ref-wav",
+        default=None,
+        help="Reference waveform path for speaker conditioning.",
     )
     ref_group.add_argument(
-        "--ref-latent", default=None, help="Reference latent (.pt) path for speaker conditioning."
+        "--ref-latent",
+        default=None,
+        help="Reference latent (.pt) path for speaker conditioning.",
+    )
+    ref_group.add_argument(
+        "--ref-embed",
+        default=None,
+        help=(
+            "Speaker Inversion embedding (.pt or .speaker.safetensors) path "
+            "for speaker conditioning."
+        ),
     )
     ref_group.add_argument(
         "--no-ref",
@@ -366,10 +388,14 @@ def main() -> None:
         )
     )
     if runtime.model_cfg.use_speaker_condition and not (
-        args.no_ref or args.ref_wav is not None or args.ref_latent is not None
+        args.no_ref
+        or args.ref_wav is not None
+        or args.ref_latent is not None
+        or args.ref_embed is not None
     ):
         parser.error(
-            "speaker-conditioned checkpoints require one of --ref-wav, --ref-latent, or --no-ref."
+            "speaker-conditioned checkpoints require one of --ref-wav, --ref-latent, "
+            "--ref-embed, or --no-ref."
         )
     cfg_scale_text, cfg_scale_caption, cfg_scale_speaker, scale_messages = resolve_cfg_scales(
         cfg_guidance_mode=str(args.cfg_guidance_mode),
@@ -393,6 +419,7 @@ def main() -> None:
             caption=None if args.caption is None else str(args.caption),
             ref_wav=args.ref_wav,
             ref_latent=args.ref_latent,
+            ref_embed=args.ref_embed,
             no_ref=bool(args.no_ref),
             ref_normalize_db=args.ref_normalize_db,
             ref_ensure_max=bool(args.ref_ensure_max),
@@ -428,6 +455,7 @@ def main() -> None:
             speaker_kv_max_layers=None
             if args.speaker_kv_max_layers is None
             else int(args.speaker_kv_max_layers),
+            speaker_uncond_mode=str(args.speaker_uncond_mode),
             seed=None if args.seed is None else int(args.seed),
             t_schedule_mode=str(args.t_schedule_mode),
             sway_coeff=float(args.sway_coeff),

@@ -28,6 +28,7 @@ For model weights and audio samples, please refer to the [base model card](https
 - **Automatic Watermarking**: Generated audio is watermarked with [SilentCipher](https://github.com/sony/silentcipher) when available
 - **Multi-GPU Training**: Distributed training via `uv run torchrun` with gradient accumulation, mixed precision (bf16), and W&B logging
 - **PEFT LoRA Fine-Tuning**: Parameter-efficient adaptation with PEFT/LoRA for released checkpoints
+- **Speaker Inversion**: Learn reusable speaker embedding tokens for a target voice while freezing the base model
 - **Flexible Inference**: CLI, Gradio Web UI, and HuggingFace Hub checkpoint support
 
 ## Architecture
@@ -91,6 +92,18 @@ uv run python infer.py \
   --output-wav outputs/sample_voice_design.wav
 ```
 
+### Speaker Inversion Inference
+
+Use a learned Speaker Inversion embedding instead of reference audio:
+
+```bash
+uv run python infer.py \
+  --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
+  --speaker-embedding path/to/my.speaker.safetensors \
+  --text "こんにちは、私はAIです。これは音声合成のテストです。" \
+  --output-wav outputs/sample_speaker_inversion.wav
+```
+
 ### Gradio Web UI
 
 ```bash
@@ -99,6 +112,7 @@ uv run python gradio_app.py --server-name 0.0.0.0 --server-port 7860
 
 Then access the UI at `http://localhost:7860`.
 The hosted v3 demo is available at [Aratako/Irodori-TTS-500M-v3-Demo](https://huggingface.co/spaces/Aratako/Irodori-TTS-500M-v3-Demo).
+The reference input area supports either reference audio/latent input or a Speaker Inversion embedding via tabs.
 
 For the VoiceDesign checkpoint, use the dedicated UI:
 
@@ -153,6 +167,18 @@ uv run python infer.py \
   --text "こんにちは、私はAIです。これはLoRA推論のテストです。" \
   --ref-wav path/to/reference.wav \
   --output-wav outputs/sample_lora.wav
+```
+
+Speaker Inversion embedding checkpoints can be used with the same base model that
+was used for inversion training. Pass the embedding with `--speaker-embedding`;
+it is mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`.
+
+```bash
+uv run python infer.py \
+  --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
+  --speaker-embedding outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
+  --text "こんにちは、私はAIです。これはSpeaker Inversion推論のテストです。" \
+  --output-wav outputs/sample_speaker_inversion.wav
 ```
 
 ### Output Duration
@@ -239,6 +265,8 @@ uv run python prepare_manifest.py \
 
 When training the caption-conditioned voice-design model, `speaker_id` is optional. The
 voice-design path disables speaker/reference conditioning and learns from `text + caption`.
+For Speaker Inversion training, the manifest should contain samples of the target voice; `speaker_id`
+is not required because the run learns one shared speaker embedding.
 
 This produces a JSONL manifest with entries like:
 
@@ -333,6 +361,40 @@ uv run python train.py \
 LoRA target presets, adapter saving behavior, and resume details are covered in the
 [Parameter Guide](docs/parameters.md).
 
+#### Speaker Inversion
+
+Speaker Inversion trains only a small set of speaker embedding tokens while keeping the
+base Irodori-TTS model frozen. It is useful when you want a reusable speaker identity
+checkpoint instead of providing reference audio at every inference call.
+
+Prepare a manifest from the target speaker's audio, then initialize from the released v3
+base checkpoint:
+
+```bash
+uv run python train.py \
+  --config configs/train_500m_v3_speaker_inversion.yaml \
+  --manifest data/target_speaker_manifest.jsonl \
+  --init-checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
+  --output-dir outputs/speaker_inversion/name
+```
+
+The saved checkpoints are embedding-only `.speaker.safetensors` files, for example
+`outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors`. Use that file
+with the base model during inference:
+
+```bash
+uv run python infer.py \
+  --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
+  --speaker-embedding outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
+  --text "こんにちは、これは学習した話者埋め込みを使った推論です。" \
+  --output-wav outputs/sample_speaker_inversion.wav
+```
+
+To continue from a saved embedding, set `speaker_inversion_init_embedding` in the
+config or pass `--speaker-inversion-init-embedding path/to/checkpoint.speaker.safetensors`.
+Full trainer `--resume` is intentionally not used for Speaker Inversion checkpoints.
+Enable `gradient_checkpointing: true` or pass `--gradient-checkpointing` if GPU memory is tight.
+
 #### Resuming Interrupted Training
 
 Resume an existing training run from a training checkpoint. Full-model runs use `.pt`; LoRA runs use checkpoint directories. Both restore optimizer, scheduler, and step state.
@@ -373,6 +435,15 @@ uv run python convert_checkpoint_to_safetensors.py outputs/irodori_tts_lora/chec
 
 LoRA adapter checkpoints are merged into the base model automatically during conversion, so the exported `.safetensors` file is directly usable for inference. If you do not want to merge the adapter, pass the adapter directory directly to `infer.py --lora-adapter` or the matching Gradio field.
 
+Speaker Inversion `.pt` checkpoints from older runs can be converted to the dedicated
+speaker embedding safetensors format. The output must use the `.speaker.safetensors`
+suffix to distinguish it from full model checkpoints:
+
+```bash
+uv run python convert_speaker_embedding_to_safetensors.py \
+  outputs/speaker_inversion/name/checkpoint_final.pt
+```
+
 ## Project Structure
 
 ```text
@@ -383,6 +454,7 @@ Irodori-TTS/
 ├── gradio_app_voicedesign.py   # Gradio web UI for VoiceDesign checkpoints
 ├── prepare_manifest.py         # Dataset -> DACVAE latent preprocessing
 ├── convert_checkpoint_to_safetensors.py  # Checkpoint converter
+├── convert_speaker_embedding_to_safetensors.py  # Speaker embedding converter
 │
 ├── docs/
 │   └── parameters.md         # Detailed parameter guide
@@ -396,6 +468,7 @@ Irodori-TTS/
 │   ├── config.py               # Model / Train / Sampling config dataclasses
 │   ├── inference_runtime.py    # Cached, thread-safe inference runtime
 │   ├── lora.py                 # PEFT LoRA integration helpers
+│   ├── speaker_inversion.py    # Speaker Inversion embedding save/load helpers
 │   ├── text_normalization.py   # Japanese text normalization
 │   ├── optim.py                # Muon + AdamW optimizer
 │   └── progress.py             # Training progress tracker
@@ -404,6 +477,7 @@ Irodori-TTS/
     ├── train_500m_v3_phase1_body.yaml        # 500M v3 body training config
     ├── train_500m_v3_phase2_duration.yaml    # 500M v3 duration-predictor training config
     ├── train_500m_v3_lora.yaml               # 500M v3 LoRA fine-tuning config
+    ├── train_500m_v3_speaker_inversion.yaml  # 500M v3 Speaker Inversion config
     ├── train_500m_v2.yaml                    # 500M v2 backward-compatible model config
     ├── train_500m_v2_lora.yaml               # 500M v2 LoRA fine-tuning config
     ├── train_500m_v2_voice_design.yaml       # 500M v2 VoiceDesign full fine-tuning config

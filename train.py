@@ -51,13 +51,23 @@ from irodori_tts.rf import (
     sample_logit_normal_t,
     sample_stratified_logit_normal_t,
 )
+from irodori_tts.speaker_inversion import (
+    SPEAKER_EMBEDDING_KEY,
+    SPEAKER_INVERSION_SAFETENSORS_SUFFIX,
+    SPEAKER_INVERSION_UNCOND_MODES,
+    load_speaker_inversion_payload,
+    save_speaker_inversion_checkpoint,
+)
 from irodori_tts.tokenizer import PretrainedTextTokenizer
 
 WANDB_MODES = {"online", "offline", "disabled"}
 TRAIN_MODES = {"rf", "duration_only"}
-CHECKPOINT_STEP_RE = re.compile(r"^checkpoint_(\d+)(?:\.pt)?$")
+CHECKPOINT_STEP_RE = re.compile(
+    rf"^checkpoint_(\d+)(?:\.pt|{re.escape(SPEAKER_INVERSION_SAFETENSORS_SUFFIX)})?$"
+)
 CHECKPOINT_BEST_VAL_LOSS_RE = re.compile(
-    r"^checkpoint_best_val_loss_(\d+)_(-?\d+(?:\.\d+)?)(?:\.pt)?$"
+    rf"^checkpoint_best_val_loss_(\d+)_(-?\d+(?:\.\d+)?)"
+    rf"(?:\.pt|{re.escape(SPEAKER_INVERSION_SAFETENSORS_SUFFIX)})?$"
 )
 SAFETENSORS_CONFIG_META_KEY = "config_json"
 SAFETENSORS_INFERENCE_CONFIG_KEYS = {"max_text_len", "max_caption_len", "fixed_target_latent_steps"}
@@ -138,6 +148,17 @@ def save_checkpoint(
     base_init: dict | None = None,
 ) -> None:
     path = Path(path)
+    if train_cfg.speaker_inversion_enabled:
+        save_speaker_inversion_checkpoint(
+            path,
+            model=model,
+            model_cfg=model_cfg,
+            train_cfg=train_cfg,
+            step=step,
+            base_init=base_init,
+        )
+        return
+
     if train_config_uses_lora(train_cfg):
         if path.exists():
             _safe_unlink(path)
@@ -286,6 +307,8 @@ def cli_provided(argv: list[str], flag: str) -> bool:
 
 
 def _periodic_checkpoint_path(output_dir: Path, step: int, train_cfg: TrainConfig) -> Path:
+    if train_cfg.speaker_inversion_enabled:
+        return output_dir / f"checkpoint_{step:07d}{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
     if train_config_uses_lora(train_cfg):
         return output_dir / f"checkpoint_{step:07d}"
     return output_dir / f"checkpoint_{step:07d}.pt"
@@ -294,12 +317,19 @@ def _periodic_checkpoint_path(output_dir: Path, step: int, train_cfg: TrainConfi
 def _best_checkpoint_path(
     output_dir: Path, *, step: int, val_loss: float, train_cfg: TrainConfig
 ) -> Path:
+    if train_cfg.speaker_inversion_enabled:
+        return (
+            output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}"
+            f"{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
+        )
     if train_config_uses_lora(train_cfg):
         return output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}"
     return output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}.pt"
 
 
 def _final_checkpoint_path(output_dir: Path, train_cfg: TrainConfig) -> Path:
+    if train_cfg.speaker_inversion_enabled:
+        return output_dir / f"checkpoint_final{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
     if train_config_uses_lora(train_cfg):
         return output_dir / "checkpoint_final"
     return output_dir / "checkpoint_final.pt"
@@ -745,6 +775,19 @@ def freeze_for_duration_only(model: torch.nn.Module) -> tuple[int, int]:
     frozen_params = 0
     for key, param in model.named_parameters():
         if is_duration_only_parameter(key):
+            param.requires_grad_(True)
+            trainable_params += param.numel()
+        else:
+            param.requires_grad_(False)
+            frozen_params += param.numel()
+    return trainable_params, frozen_params
+
+
+def freeze_for_speaker_inversion(model: torch.nn.Module) -> tuple[int, int]:
+    trainable_params = 0
+    frozen_params = 0
+    for key, param in model.named_parameters():
+        if _canonical_parameter_key(key).startswith("speaker_inversion."):
             param.requires_grad_(True)
             trainable_params += param.numel()
         else:
@@ -1261,12 +1304,7 @@ def run_validation(
 
             rf_loss = torch.zeros((), device=device, dtype=torch.float32)
             if not duration_only:
-                if (
-                    v_pred is None
-                    or v_target is None
-                    or x_mask is None
-                    or x_mask_valid is None
-                ):
+                if v_pred is None or v_target is None or x_mask is None or x_mask_valid is None:
                     raise RuntimeError("RF validation tensors are missing.")
                 v_pred = v_pred.float()
                 rf_loss = compute_rf_loss(
@@ -1340,9 +1378,7 @@ def run_validation(
                     float(totals[9].item() / no_speaker_count) if no_speaker_count > 0.0 else 0.0
                 ),
                 "duration_mae_frames_no_speaker": (
-                    float(totals[10].item() / no_speaker_count)
-                    if no_speaker_count > 0.0
-                    else 0.0
+                    float(totals[10].item() / no_speaker_count) if no_speaker_count > 0.0 else 0.0
                 ),
                 "duration_samples_no_speaker": no_speaker_count,
             }
@@ -1384,6 +1420,13 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Enable torch.compile for the training model.",
+    )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        dest="gradient_checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable activation checkpointing on diffusion blocks to reduce memory.",
     )
     parser.add_argument(
         "--train-mode",
@@ -1497,6 +1540,49 @@ def main() -> None:
         type=float,
         default=0.1,
         help="Probability of dropping speaker/reference conditioning during training.",
+    )
+    speaker_inversion_group = parser.add_mutually_exclusive_group()
+    speaker_inversion_group.add_argument(
+        "--speaker-inversion",
+        dest="speaker_inversion_enabled",
+        action="store_true",
+        help="Train only learned speaker inversion embedding tokens.",
+    )
+    speaker_inversion_group.add_argument(
+        "--no-speaker-inversion",
+        dest="speaker_inversion_enabled",
+        action="store_false",
+        help="Disable Speaker Inversion training.",
+    )
+    parser.set_defaults(speaker_inversion_enabled=None)
+    parser.add_argument(
+        "--speaker-inversion-tokens",
+        type=int,
+        default=None,
+        help="Number of learned Speaker Inversion tokens.",
+    )
+    parser.add_argument(
+        "--speaker-inversion-init-std",
+        type=float,
+        default=None,
+        help="Stddev for random Speaker Inversion token initialization.",
+    )
+    parser.add_argument(
+        "--speaker-inversion-init-embedding",
+        default=None,
+        help="Optional existing Speaker Inversion .pt checkpoint to continue from.",
+    )
+    parser.add_argument(
+        "--speaker-inversion-uncond-mode",
+        choices=sorted(SPEAKER_INVERSION_UNCOND_MODES),
+        default=None,
+        help="Speaker CFG unconditional branch for Speaker Inversion.",
+    )
+    parser.add_argument(
+        "--speaker-inversion-uncond-std",
+        type=float,
+        default=None,
+        help="Stddev for fixed noise unconditional tokens when uncond-mode=noise.",
     )
     parser.add_argument(
         "--timestep-stratified",
@@ -1671,6 +1757,8 @@ def main() -> None:
         train_cfg = replace(train_cfg, allow_tf32=args.allow_tf32)
     if args.compile_model is not None:
         train_cfg = replace(train_cfg, compile_model=args.compile_model)
+    if args.gradient_checkpointing is not None:
+        train_cfg = replace(train_cfg, gradient_checkpointing=args.gradient_checkpointing)
     if cli_provided(raw_argv, "--train-mode"):
         train_cfg = replace(train_cfg, train_mode=args.train_mode)
     if cli_provided(raw_argv, "--batch-size"):
@@ -1720,6 +1808,30 @@ def main() -> None:
         train_cfg = replace(train_cfg, caption_condition_dropout=args.caption_condition_dropout)
     if cli_provided(raw_argv, "--speaker-condition-dropout"):
         train_cfg = replace(train_cfg, speaker_condition_dropout=args.speaker_condition_dropout)
+    if args.speaker_inversion_enabled is not None:
+        train_cfg = replace(
+            train_cfg,
+            speaker_inversion_enabled=bool(args.speaker_inversion_enabled),
+        )
+    if cli_provided(raw_argv, "--speaker-inversion-tokens"):
+        train_cfg = replace(train_cfg, speaker_inversion_tokens=args.speaker_inversion_tokens)
+    if cli_provided(raw_argv, "--speaker-inversion-init-std"):
+        train_cfg = replace(train_cfg, speaker_inversion_init_std=args.speaker_inversion_init_std)
+    if cli_provided(raw_argv, "--speaker-inversion-init-embedding"):
+        train_cfg = replace(
+            train_cfg,
+            speaker_inversion_init_embedding=args.speaker_inversion_init_embedding,
+        )
+    if cli_provided(raw_argv, "--speaker-inversion-uncond-mode"):
+        train_cfg = replace(
+            train_cfg,
+            speaker_inversion_uncond_mode=args.speaker_inversion_uncond_mode,
+        )
+    if cli_provided(raw_argv, "--speaker-inversion-uncond-std"):
+        train_cfg = replace(
+            train_cfg,
+            speaker_inversion_uncond_std=args.speaker_inversion_uncond_std,
+        )
     if cli_provided(raw_argv, "--timestep-stratified"):
         train_cfg = replace(train_cfg, timestep_stratified=True)
     if cli_provided(raw_argv, "--max-latent-steps"):
@@ -1831,6 +1943,59 @@ def main() -> None:
             "speaker_condition_dropout must be in [0, 1], "
             f"got {train_cfg.speaker_condition_dropout}"
         )
+    if train_cfg.speaker_inversion_enabled:
+        if not model_cfg.use_speaker_condition:
+            raise ValueError(
+                "speaker_inversion_enabled=True requires a speaker-conditioned model config."
+            )
+        if args.init_checkpoint is None:
+            raise ValueError(
+                "speaker_inversion_enabled=True requires --init-checkpoint so the frozen "
+                "base TTS model is initialized from trained weights."
+            )
+        if args.resume is not None:
+            raise ValueError(
+                "speaker_inversion_enabled=True saves embedding-only checkpoints; "
+                "--resume full trainer state is not supported. Use "
+                "speaker_inversion_init_embedding to continue from a saved embedding."
+            )
+        if train_config_uses_lora(train_cfg):
+            raise ValueError("speaker_inversion_enabled=True does not support LoRA training.")
+        if train_cfg.train_mode != "rf":
+            raise ValueError("speaker_inversion_enabled=True supports train_mode='rf' only.")
+        if train_cfg.caption_warmup:
+            raise ValueError("speaker_inversion_enabled=True does not support caption_warmup.")
+        if train_cfg.speaker_inversion_tokens <= 0:
+            raise ValueError(
+                f"speaker_inversion_tokens must be > 0, got {train_cfg.speaker_inversion_tokens}"
+            )
+        if train_cfg.speaker_inversion_init_std < 0:
+            raise ValueError(
+                "speaker_inversion_init_std must be >= 0, "
+                f"got {train_cfg.speaker_inversion_init_std}"
+            )
+        if train_cfg.speaker_inversion_uncond_std < 0:
+            raise ValueError(
+                "speaker_inversion_uncond_std must be >= 0, "
+                f"got {train_cfg.speaker_inversion_uncond_std}"
+            )
+        uncond_mode = str(train_cfg.speaker_inversion_uncond_mode).strip().lower()
+        if uncond_mode not in SPEAKER_INVERSION_UNCOND_MODES:
+            raise ValueError(
+                "speaker_inversion_uncond_mode must be one of "
+                f"{sorted(SPEAKER_INVERSION_UNCOND_MODES)}, got {uncond_mode!r}"
+            )
+        train_cfg = replace(train_cfg, speaker_inversion_uncond_mode=uncond_mode)
+        optimizer_explicit = cli_provided(raw_argv, "--optimizer") or (
+            isinstance(exp_cfg.get("train"), dict) and "optimizer" in exp_cfg.get("train", {})
+        )
+        if str(train_cfg.optimizer).strip().lower() == "muon":
+            if optimizer_explicit:
+                raise ValueError(
+                    "speaker_inversion_enabled=True supports optimizer='adamw'. "
+                    "Muon has no compatible matrix parameter when only speaker tokens are trainable."
+                )
+            train_cfg = replace(train_cfg, optimizer="adamw")
     if not (0.0 <= train_cfg.caption_condition_dropout <= 1.0):
         raise ValueError(
             "caption_condition_dropout must be in [0, 1], "
@@ -1888,8 +2053,7 @@ def main() -> None:
             )
         if model_cfg.duration_attention_heads <= 0:
             raise ValueError(
-                "duration_attention_heads must be > 0, "
-                f"got {model_cfg.duration_attention_heads}"
+                f"duration_attention_heads must be > 0, got {model_cfg.duration_attention_heads}"
             )
         if model_cfg.text_dim % model_cfg.duration_attention_heads != 0:
             raise ValueError(
@@ -2292,15 +2456,55 @@ def main() -> None:
             f"modules_to_save={train_cfg.lora_modules_to_save!r} "
             f"trainable={trainable_params:,}/{total_params:,}"
         )
+    if train_cfg.speaker_inversion_enabled:
+        init_embedding = None
+        if train_cfg.speaker_inversion_init_embedding is not None:
+            init_payload = load_speaker_inversion_payload(
+                train_cfg.speaker_inversion_init_embedding,
+            )
+            init_embedding = init_payload[SPEAKER_EMBEDDING_KEY]
+            if is_main_process:
+                print(
+                    "Loaded Speaker Inversion init embedding: "
+                    f"{train_cfg.speaker_inversion_init_embedding}"
+                )
+        speaker_inversion = raw_model.enable_speaker_inversion(
+            num_tokens=train_cfg.speaker_inversion_tokens,
+            init_std=train_cfg.speaker_inversion_init_std,
+            uncond_mode=train_cfg.speaker_inversion_uncond_mode,
+            uncond_std=train_cfg.speaker_inversion_uncond_std,
+            init_embedding=init_embedding,
+        )
+        speaker_inversion.to(device)
+        if is_main_process:
+            print(
+                "Speaker Inversion parameters initialized: "
+                f"embedding={tuple(speaker_inversion.embedding.shape)}."
+            )
     if train_cfg.train_mode == "duration_only":
         trainable_duration_params, frozen_params = freeze_for_duration_only(raw_model)
         if trainable_duration_params == 0:
-            raise RuntimeError("No duration predictor parameters were found for duration_only mode.")
+            raise RuntimeError(
+                "No duration predictor parameters were found for duration_only mode."
+            )
         if is_main_process:
             print(
                 "Duration-only training enabled: "
                 f"trainable={trainable_duration_params:,} frozen={frozen_params:,}."
             )
+    if train_cfg.speaker_inversion_enabled:
+        trainable_speaker_params, frozen_params = freeze_for_speaker_inversion(raw_model)
+        if trainable_speaker_params == 0:
+            raise RuntimeError("No Speaker Inversion parameters were found.")
+        if is_main_process:
+            print(
+                "Speaker Inversion freeze applied: "
+                f"trainable={trainable_speaker_params:,} frozen={frozen_params:,}."
+            )
+    if train_cfg.gradient_checkpointing:
+        raw_model.set_gradient_checkpointing(True)
+        if is_main_process:
+            print("Gradient checkpointing enabled on diffusion blocks.")
     train_model = raw_model
     if train_cfg.compile_model:
         if not hasattr(torch, "compile"):
@@ -2497,17 +2701,29 @@ def main() -> None:
                     speaker_cond_drop = (
                         torch.rand(bsz, device=device) < train_cfg.speaker_condition_dropout
                     )
-                    use_speaker = has_speaker & (~speaker_cond_drop)
-                    speaker_drop_for_model = ~use_speaker
+                    if train_cfg.speaker_inversion_enabled:
+                        # Speaker Inversion learns one embedding for this run, so all samples are
+                        # speaker-conditioned even when the manifest has no speaker_id.
+                        use_speaker = ~speaker_cond_drop
+                        speaker_drop_for_model = speaker_cond_drop
+                    else:
+                        use_speaker = has_speaker & (~speaker_cond_drop)
+                        speaker_drop_for_model = ~use_speaker
                     duration_speaker_drop = (
                         torch.rand(bsz, device=device) < train_cfg.duration_speaker_dropout
                     )
-                    duration_has_speaker = has_speaker & (~duration_speaker_drop)
+                    if train_cfg.speaker_inversion_enabled:
+                        duration_has_speaker = ~duration_speaker_drop
+                    else:
+                        duration_has_speaker = has_speaker & (~duration_speaker_drop)
                     duration_features = set_duration_has_speaker_feature(
                         duration_features,
                         duration_has_speaker,
                     )
-                    if not raw_model.cfg.use_duration_predictor:
+                    if (
+                        not raw_model.cfg.use_duration_predictor
+                        and not train_cfg.speaker_inversion_enabled
+                    ):
                         ref_mask = ref_mask & use_speaker[:, None]
                         ref_latent = ref_latent * use_speaker[:, None, None].to(ref_latent.dtype)
 
@@ -2564,7 +2780,9 @@ def main() -> None:
                                 caption_mask=caption_mask,
                                 latent_mask=x_mask,
                                 text_condition_dropout=None,
-                                speaker_condition_dropout=None,
+                                speaker_condition_dropout=speaker_drop_for_model
+                                if train_cfg.speaker_inversion_enabled
+                                else None,
                                 caption_condition_dropout=None,
                             )
                             duration_pred = None
@@ -2802,8 +3020,7 @@ def main() -> None:
                     if is_main_process:
                         if raw_model.cfg.use_duration_predictor:
                             message = (
-                                "valid step={} loss={:.6f} rf={:.6f} dur={:.6f} "
-                                "dur_mae={:.2f}"
+                                "valid step={} loss={:.6f} rf={:.6f} dur={:.6f} dur_mae={:.2f}"
                             ).format(
                                 step,
                                 valid_metrics["loss"],
@@ -2913,8 +3130,7 @@ def main() -> None:
             if is_main_process:
                 if raw_model.cfg.use_duration_predictor:
                     message = (
-                        "valid final step={} loss={:.6f} rf={:.6f} dur={:.6f} "
-                        "dur_mae={:.2f}"
+                        "valid final step={} loss={:.6f} rf={:.6f} dur={:.6f} dur_mae={:.2f}"
                     ).format(
                         step,
                         valid_metrics["loss"],

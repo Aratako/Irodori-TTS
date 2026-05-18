@@ -126,6 +126,9 @@ def sample_euler_rf_cfg(
     sequence_length: int,
     caption_input_ids: torch.Tensor | None = None,
     caption_mask: torch.Tensor | None = None,
+    speaker_state_override: torch.Tensor | None = None,
+    speaker_mask_override: torch.Tensor | None = None,
+    speaker_uncond_mode: str = "mask",
     num_steps: int = 40,
     cfg_scale_text: float = 3.0,
     cfg_scale_caption: float = 3.0,
@@ -219,6 +222,9 @@ def sample_euler_rf_cfg(
         ref_mask=ref_mask,
         caption_input_ids=caption_input_ids,
         caption_mask=caption_mask,
+        speaker_state_override=speaker_state_override,
+        speaker_mask_override=speaker_mask_override,
+        speaker_uncond_mode=speaker_uncond_mode,
     )
     text_state_uncond = torch.zeros_like(text_state_cond)
     text_mask_uncond = torch.zeros_like(text_mask_cond)
@@ -229,8 +235,13 @@ def sample_euler_rf_cfg(
             raise RuntimeError(
                 "Speaker conditioning is enabled but encoded speaker state is missing."
             )
-        speaker_state_uncond = torch.zeros_like(speaker_state_cond)
-        speaker_mask_uncond = torch.zeros_like(speaker_mask_cond)
+        effective_speaker_uncond_mode = str(speaker_uncond_mode).strip().lower()
+        if effective_speaker_uncond_mode == "noise":
+            speaker_state_uncond = torch.randn_like(speaker_state_cond) * speaker_state_cond.std().clamp_min(1e-6)
+            speaker_mask_uncond = torch.ones_like(speaker_mask_cond)
+        else:
+            speaker_state_uncond = torch.zeros_like(speaker_state_cond)
+            speaker_mask_uncond = torch.zeros_like(speaker_mask_cond)
     caption_state_uncond = None
     caption_mask_uncond = None
     if model.cfg.use_caption_condition:

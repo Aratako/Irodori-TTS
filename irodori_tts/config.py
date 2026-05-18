@@ -125,6 +125,7 @@ class TrainConfig:
     dataloader_prefetch_factor: int = 2
     allow_tf32: bool = False
     compile_model: bool = False
+    gradient_checkpointing: bool = False
     train_mode: str = "rf"
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
@@ -156,6 +157,12 @@ class TrainConfig:
     text_condition_dropout: float = 0.1
     caption_condition_dropout: float = 0.1
     speaker_condition_dropout: float = 0.1
+    speaker_inversion_enabled: bool = False
+    speaker_inversion_tokens: int = 16
+    speaker_inversion_init_std: float = 0.02
+    speaker_inversion_init_embedding: str | None = None
+    speaker_inversion_uncond_mode: str = "mask"
+    speaker_inversion_uncond_std: float = 1.0
     max_latent_steps: int = 750
     fixed_target_latent_steps: int | None = 750
     fixed_target_full_mask: bool = True

@@ -6,8 +6,10 @@ from dataclasses import asdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as _torch_checkpoint
 
 from .config import ModelConfig
+from .speaker_inversion import SPEAKER_INVERSION_UNCOND_MODES, SpeakerInversionEmbedding
 
 DURATION_SPEAKER_FUSIONS = {
     "concat",
@@ -1158,6 +1160,7 @@ class TextToLatentRFDiT(nn.Module):
 
         self.in_proj = nn.Linear(cfg.patched_latent_dim, cfg.model_dim)
         self.blocks = nn.ModuleList(DiffusionBlock(cfg) for _ in range(cfg.num_layers))
+        self.gradient_checkpointing = False
         self.out_norm = RMSNorm(cfg.model_dim, eps=cfg.norm_eps)
         self.out_proj = nn.Linear(cfg.model_dim, cfg.patched_latent_dim)
         # Echo/JAX training initializes decoder out projection to zero for stable early training.
@@ -1171,6 +1174,31 @@ class TextToLatentRFDiT(nn.Module):
         self.register_buffer(
             "_freqs_cis_cache", torch.empty(0, 0, dtype=torch.complex64), persistent=False
         )
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        self.gradient_checkpointing = bool(enabled)
+
+    def enable_speaker_inversion(
+        self,
+        *,
+        num_tokens: int,
+        init_std: float,
+        uncond_mode: str = "mask",
+        uncond_std: float = 1.0,
+        init_embedding: torch.Tensor | None = None,
+    ) -> SpeakerInversionEmbedding:
+        if not self.cfg.use_speaker_condition:
+            raise ValueError("Speaker inversion requires model speaker conditioning to be enabled.")
+        module = SpeakerInversionEmbedding(
+            num_tokens=int(num_tokens),
+            speaker_dim=int(self.cfg.speaker_dim),
+            init_std=float(init_std),
+            uncond_mode=uncond_mode,
+            uncond_std=float(uncond_std),
+            init_embedding=init_embedding,
+        )
+        self.speaker_inversion = module
+        return module
 
     def _rope_freqs(self, seq_len: int, device: torch.device) -> torch.Tensor:
         cache = self._freqs_cis_cache
@@ -1195,6 +1223,112 @@ class TextToLatentRFDiT(nn.Module):
         mask = torch.cat([has_any, mask], dim=1)
         return state, mask
 
+    @staticmethod
+    def _expand_speaker_condition_batch(
+        state: torch.Tensor,
+        mask: torch.Tensor | None,
+        *,
+        batch_size: int,
+        speaker_dim: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if state.ndim == 2:
+            state = state.unsqueeze(0)
+        if state.ndim != 3:
+            raise ValueError(
+                f"speaker_state must have shape (B,S,D) or (S,D), got {tuple(state.shape)}"
+            )
+        if int(state.shape[-1]) != int(speaker_dim):
+            raise ValueError(
+                f"speaker_state last dim must be {int(speaker_dim)}, got {int(state.shape[-1])}"
+            )
+        if state.shape[0] == 1 and batch_size != 1:
+            state = state.expand(batch_size, -1, -1)
+        elif int(state.shape[0]) != int(batch_size):
+            raise ValueError(
+                f"speaker_state batch mismatch: expected {int(batch_size)}, got {int(state.shape[0])}"
+            )
+
+        if mask is None:
+            mask = torch.ones(state.shape[:2], dtype=torch.bool, device=state.device)
+        else:
+            if mask.ndim == 1:
+                mask = mask.unsqueeze(0)
+            if mask.ndim != 2:
+                raise ValueError(
+                    f"speaker_mask must have shape (B,S) or (S,), got {tuple(mask.shape)}"
+                )
+            if mask.shape[0] == 1 and batch_size != 1:
+                mask = mask.expand(batch_size, -1)
+            elif int(mask.shape[0]) != int(batch_size):
+                raise ValueError(
+                    f"speaker_mask batch mismatch: expected {int(batch_size)}, got {int(mask.shape[0])}"
+                )
+            if int(mask.shape[1]) != int(state.shape[1]):
+                raise ValueError(
+                    "speaker_mask token mismatch: "
+                    f"state={tuple(state.shape)} mask={tuple(mask.shape)}"
+                )
+            mask = mask.to(device=state.device, dtype=torch.bool)
+        return state, mask
+
+    def _speaker_inversion_uncond(
+        self,
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        module = getattr(self, "speaker_inversion", None)
+        if not isinstance(module, SpeakerInversionEmbedding):
+            return None, None
+        state, mask = module.unconditional(batch_size=batch_size, device=device, dtype=dtype)
+        return state, mask
+
+    def _apply_speaker_condition_dropout(
+        self,
+        *,
+        speaker_state: torch.Tensor,
+        speaker_mask: torch.Tensor,
+        dropout_mask: torch.Tensor | None,
+        uncond_state: torch.Tensor | None,
+        uncond_mask: torch.Tensor | None,
+        uncond_mode: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if dropout_mask is None:
+            return speaker_state, speaker_mask
+        dropout_mask = dropout_mask.to(device=speaker_state.device, dtype=torch.bool)
+        if dropout_mask.ndim != 1 or dropout_mask.shape[0] != speaker_state.shape[0]:
+            raise ValueError(
+                "speaker_condition_dropout must have shape (B,), "
+                f"got {tuple(dropout_mask.shape)} for speaker_state={tuple(speaker_state.shape)}"
+            )
+        mode = str(uncond_mode).strip().lower()
+        if mode not in SPEAKER_INVERSION_UNCOND_MODES:
+            raise ValueError(
+                f"speaker_uncond_mode must be one of {sorted(SPEAKER_INVERSION_UNCOND_MODES)}, "
+                f"got {uncond_mode!r}"
+            )
+        if mode == "noise":
+            if uncond_state is None:
+                uncond_state = torch.zeros_like(speaker_state)
+            if uncond_mask is None:
+                uncond_mask = torch.ones_like(speaker_mask)
+            uncond_state, uncond_mask = self._expand_speaker_condition_batch(
+                uncond_state,
+                uncond_mask,
+                batch_size=speaker_state.shape[0],
+                speaker_dim=self.cfg.speaker_dim,
+            )
+            uncond_state = uncond_state.to(device=speaker_state.device, dtype=speaker_state.dtype)
+            uncond_mask = uncond_mask.to(device=speaker_state.device, dtype=torch.bool)
+            speaker_state = torch.where(dropout_mask[:, None, None], uncond_state, speaker_state)
+            speaker_mask = torch.where(dropout_mask[:, None], uncond_mask, speaker_mask)
+            return speaker_state, speaker_mask
+
+        speaker_mask = speaker_mask.clone()
+        speaker_mask[dropout_mask] = False
+        return speaker_state, speaker_mask
+
     def encode_conditions(
         self,
         text_input_ids: torch.Tensor,
@@ -1203,6 +1337,9 @@ class TextToLatentRFDiT(nn.Module):
         ref_mask: torch.Tensor | None,
         caption_input_ids: torch.Tensor | None = None,
         caption_mask: torch.Tensor | None = None,
+        speaker_state_override: torch.Tensor | None = None,
+        speaker_mask_override: torch.Tensor | None = None,
+        speaker_uncond_mode: str = "mask",
         text_condition_dropout: torch.Tensor | None = None,
         speaker_condition_dropout: torch.Tensor | None = None,
         caption_condition_dropout: torch.Tensor | None = None,
@@ -1218,17 +1355,24 @@ class TextToLatentRFDiT(nn.Module):
             text_mask = text_mask.clone()
             text_mask[text_condition_dropout] = False
         if self.cfg.use_speaker_condition:
-            if self.speaker_encoder is None or self.speaker_norm is None:
+            speaker_inversion = getattr(self, "speaker_inversion", None)
+            has_direct_speaker = speaker_state_override is not None or isinstance(
+                speaker_inversion, SpeakerInversionEmbedding
+            )
+            if not has_direct_speaker and (
+                self.speaker_encoder is None or self.speaker_norm is None
+            ):
                 raise RuntimeError(
                     "Speaker conditioning is enabled but speaker modules are missing."
                 )
-            if ref_latent is None or ref_mask is None:
+            if not has_direct_speaker and (ref_latent is None or ref_mask is None):
                 raise ValueError(
                     "ref_latent and ref_mask are required when speaker conditioning is enabled."
                 )
-            if speaker_condition_dropout is not None:
-                ref_mask = ref_mask.clone()
-                ref_mask[speaker_condition_dropout] = False
+        elif speaker_state_override is not None:
+            raise ValueError(
+                "speaker_state_override was provided but speaker conditioning is disabled."
+            )
         if self.cfg.use_caption_condition:
             if self.caption_encoder is None or self.caption_norm is None:
                 raise RuntimeError(
@@ -1246,14 +1390,45 @@ class TextToLatentRFDiT(nn.Module):
         text_state = self.text_norm(text_state)
         ref_state = None
         if self.cfg.use_speaker_condition:
-            ref_latent, ref_mask = patch_sequence_with_mask(
-                seq=ref_latent,
-                mask=ref_mask,
-                patch_size=self.cfg.speaker_patch_size,
+            if speaker_state_override is not None:
+                ref_state, ref_mask = self._expand_speaker_condition_batch(
+                    speaker_state_override,
+                    speaker_mask_override,
+                    batch_size=text_input_ids.shape[0],
+                    speaker_dim=self.cfg.speaker_dim,
+                )
+                ref_state = ref_state.to(device=text_state.device, dtype=text_state.dtype)
+                ref_mask = ref_mask.to(device=text_state.device, dtype=torch.bool)
+            else:
+                speaker_inversion = getattr(self, "speaker_inversion", None)
+                if isinstance(speaker_inversion, SpeakerInversionEmbedding):
+                    ref_state, ref_mask = speaker_inversion(
+                        batch_size=text_input_ids.shape[0],
+                        device=text_state.device,
+                        dtype=text_state.dtype,
+                    )
+                else:
+                    ref_latent, ref_mask = patch_sequence_with_mask(
+                        seq=ref_latent,
+                        mask=ref_mask,
+                        patch_size=self.cfg.speaker_patch_size,
+                    )
+                    ref_state = self.speaker_encoder(ref_latent, ref_mask)
+                    ref_state = self.speaker_norm(ref_state)
+                    ref_state, ref_mask = self._prepend_masked_mean_token(ref_state, ref_mask)
+            speaker_uncond_state, speaker_uncond_mask = self._speaker_inversion_uncond(
+                batch_size=text_input_ids.shape[0],
+                device=text_state.device,
+                dtype=text_state.dtype,
             )
-            ref_state = self.speaker_encoder(ref_latent, ref_mask)
-            ref_state = self.speaker_norm(ref_state)
-            ref_state, ref_mask = self._prepend_masked_mean_token(ref_state, ref_mask)
+            ref_state, ref_mask = self._apply_speaker_condition_dropout(
+                speaker_state=ref_state,
+                speaker_mask=ref_mask,
+                dropout_mask=speaker_condition_dropout,
+                uncond_state=speaker_uncond_state,
+                uncond_mask=speaker_uncond_mask,
+                uncond_mode=speaker_uncond_mode,
+            )
         caption_state = None
         if self.cfg.use_caption_condition:
             caption_state = self.caption_encoder(caption_input_ids, caption_mask)
@@ -1279,20 +1454,38 @@ class TextToLatentRFDiT(nn.Module):
 
         x = self.in_proj(x_t)
         freqs = self._rope_freqs(x.shape[1], x.device)
+        use_checkpoint = self.gradient_checkpointing and self.training and context_kv_cache is None
         for i, block in enumerate(self.blocks):
-            x = block(
-                x=x,
-                cond_embed=cond_embed,
-                text_state=text_state,
-                text_mask=text_mask,
-                speaker_state=speaker_state,
-                speaker_mask=speaker_mask,
-                caption_state=caption_state,
-                caption_mask=caption_mask,
-                freqs_cis=freqs,
-                self_mask=latent_mask,
-                context_kv=context_kv_cache[i] if context_kv_cache is not None else None,
-            )
+            context_kv = context_kv_cache[i] if context_kv_cache is not None else None
+            if use_checkpoint:
+                x = _torch_checkpoint(
+                    block,
+                    x,
+                    cond_embed,
+                    text_state,
+                    text_mask,
+                    speaker_state,
+                    speaker_mask,
+                    caption_state,
+                    caption_mask,
+                    freqs,
+                    latent_mask,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(
+                    x=x,
+                    cond_embed=cond_embed,
+                    text_state=text_state,
+                    text_mask=text_mask,
+                    speaker_state=speaker_state,
+                    speaker_mask=speaker_mask,
+                    caption_state=caption_state,
+                    caption_mask=caption_mask,
+                    freqs_cis=freqs,
+                    self_mask=latent_mask,
+                    context_kv=context_kv,
+                )
 
         x = self.out_norm(x)
         x = self.out_proj(x)
@@ -1345,14 +1538,36 @@ class TextToLatentRFDiT(nn.Module):
             if x_t is None or t is None:
                 raise ValueError("x_t and t are required unless duration_only=True.")
             text_mask_dit = text_mask_full
+            speaker_state_dit = speaker_state
             speaker_mask_dit = speaker_mask_full
             caption_mask_dit = caption_mask_full
             if text_condition_dropout is not None:
                 text_mask_dit = text_mask_dit.clone()
                 text_mask_dit[text_condition_dropout] = False
-            if speaker_condition_dropout is not None and speaker_mask_dit is not None:
-                speaker_mask_dit = speaker_mask_dit.clone()
-                speaker_mask_dit[speaker_condition_dropout] = False
+            if (
+                speaker_condition_dropout is not None
+                and speaker_state_dit is not None
+                and speaker_mask_dit is not None
+            ):
+                speaker_uncond_state, speaker_uncond_mask = self._speaker_inversion_uncond(
+                    batch_size=text_input_ids.shape[0],
+                    device=speaker_state_dit.device,
+                    dtype=speaker_state_dit.dtype,
+                )
+                _inv_module = getattr(self, "speaker_inversion", None)
+                _uncond_mode = (
+                    _inv_module.uncond_mode
+                    if isinstance(_inv_module, SpeakerInversionEmbedding)
+                    else "mask"
+                )
+                speaker_state_dit, speaker_mask_dit = self._apply_speaker_condition_dropout(
+                    speaker_state=speaker_state_dit,
+                    speaker_mask=speaker_mask_dit,
+                    dropout_mask=speaker_condition_dropout,
+                    uncond_state=speaker_uncond_state,
+                    uncond_mask=speaker_uncond_mask,
+                    uncond_mode=_uncond_mode,
+                )
             if caption_condition_dropout is not None and caption_mask_dit is not None:
                 caption_mask_dit = caption_mask_dit.clone()
                 caption_mask_dit[caption_condition_dropout] = False
@@ -1362,7 +1577,7 @@ class TextToLatentRFDiT(nn.Module):
                 t=t,
                 text_state=text_state,
                 text_mask=text_mask_dit,
-                speaker_state=speaker_state,
+                speaker_state=speaker_state_dit,
                 speaker_mask=speaker_mask_dit,
                 caption_state=caption_state,
                 caption_mask=caption_mask_dit,
