@@ -450,13 +450,13 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("Speaker Embedding"):
                 with gr.Row():
                     uploaded_speaker_embedding = gr.File(
-                        label="Speaker Embedding Upload (.pt/.speaker.safetensors, optional)",
+                        label="Speaker Embedding Upload (.speaker.safetensors, optional)",
                         type="filepath",
                         file_count="single",
                         scale=1,
                     )
                     speaker_embedding_path_raw = gr.Textbox(
-                        label="Speaker Embedding Path (.pt/.speaker.safetensors, optional)",
+                        label="Speaker Embedding Path (.speaker.safetensors, optional)",
                         value="",
                         scale=1,
                     )

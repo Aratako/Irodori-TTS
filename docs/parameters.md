@@ -38,7 +38,7 @@ Use either `--checkpoint` or `--hf-checkpoint`, not both.
 | `--ref-wav` | `None` | Reference waveform used for speaker/style conditioning in the base model. |
 | `--ref-latent` | `None` | Precomputed reference latent (`.pt`) used instead of encoding `--ref-wav` at inference time. Useful for repeated inference with the same reference. |
 | `--no-ref` | `False` | Disables speaker/reference conditioning. Use this for VoiceDesign checkpoints, or for text-only inference with base checkpoints. |
-| `--ref-embed` | `None` | Speaker Inversion embedding (`.speaker.safetensors` or `.pt`) path. Mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`. Use the file produced by Speaker Inversion training instead of a reference waveform. |
+| `--ref-embed` | `None` | Speaker Inversion embedding (`.speaker.safetensors`) path. Mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`. Use the file produced by Speaker Inversion training instead of a reference waveform. |
 | `--max-ref-seconds` | `30.0` | Caps the reference audio duration before encoding. The released models were trained on audio up to 30 seconds, so keeping the default cap is recommended. Set `<=0` only when you intentionally want to disable the cap. |
 | `--ref-normalize-db` | `-16.0` | Loudness target applied to reference audio before DACVAE encode. This normalization was used when training the codec, so keeping the default is recommended. Use `none` only for controlled experiments. |
 | `--ref-ensure-max` | `True` | When loudness normalization is disabled, scales the reference down only if peak amplitude exceeds `1.0`. In normal use, prefer leaving loudness normalization enabled instead of relying on this fallback. |

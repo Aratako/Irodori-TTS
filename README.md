@@ -435,15 +435,6 @@ uv run python convert_checkpoint_to_safetensors.py outputs/irodori_tts_lora/chec
 
 LoRA adapter checkpoints are merged into the base model automatically during conversion, so the exported `.safetensors` file is directly usable for inference. If you do not want to merge the adapter, pass the adapter directory directly to `infer.py --lora-adapter` or the matching Gradio field.
 
-Speaker Inversion `.pt` checkpoints from older runs can be converted to the dedicated
-speaker embedding safetensors format. The output must use the `.speaker.safetensors`
-suffix to distinguish it from full model checkpoints:
-
-```bash
-uv run python convert_speaker_embedding_to_safetensors.py \
-  outputs/speaker_inversion/name/checkpoint_final.pt
-```
-
 ## Project Structure
 
 ```text
@@ -454,7 +445,6 @@ Irodori-TTS/
 ├── gradio_app_voicedesign.py   # Gradio web UI for VoiceDesign checkpoints
 ├── prepare_manifest.py         # Dataset -> DACVAE latent preprocessing
 ├── convert_checkpoint_to_safetensors.py  # Checkpoint converter
-├── convert_speaker_embedding_to_safetensors.py  # Speaker embedding converter
 │
 ├── docs/
 │   └── parameters.md         # Detailed parameter guide

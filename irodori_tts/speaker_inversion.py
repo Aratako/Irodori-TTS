@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 import torch
 import torch.nn as nn
 from safetensors.torch import load_file as load_safetensors_file
 from safetensors.torch import save_file as save_safetensors_file
 
-from .config import ModelConfig, TrainConfig
-
-SPEAKER_INVERSION_FORMAT = "irodori_speaker_inversion"
-SPEAKER_INVERSION_FORMAT_VERSION = 1
 SPEAKER_INVERSION_UNCOND_MODES = {"mask", "noise"}
 SPEAKER_INVERSION_SAFETENSORS_SUFFIX = ".speaker.safetensors"
 SPEAKER_EMBEDDING_KEY = "speaker_embedding"
@@ -41,16 +35,6 @@ def normalize_speaker_embedding_tensor(
 def is_speaker_inversion_safetensors_path(path: str | Path) -> bool:
     return Path(path).name.endswith(SPEAKER_INVERSION_SAFETENSORS_SUFFIX)
 
-
-def default_speaker_inversion_safetensors_path(path: str | Path) -> Path:
-    source = Path(path)
-    if is_speaker_inversion_safetensors_path(source):
-        return source
-    if source.suffix:
-        stem_path = source.with_suffix("")
-    else:
-        stem_path = source
-    return stem_path.with_name(f"{stem_path.name}.speaker.safetensors")
 
 
 class SpeakerInversionEmbedding(nn.Module):
@@ -114,29 +98,26 @@ class SpeakerInversionEmbedding(nn.Module):
         return state, mask
 
 
-def _extract_embedding_payload(
-    raw: Any,
-    *,
-    model_cfg: ModelConfig | None = None,
-) -> dict[str, torch.Tensor]:
-    if isinstance(raw, torch.Tensor):
-        return {SPEAKER_EMBEDDING_KEY: raw}
+def _extract_embedding_payload(raw: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     if not isinstance(raw, dict):
         raise ValueError(
-            f"Speaker inversion file must contain a tensor or dict, got {type(raw)!r}."
+            f"Speaker inversion file must contain a tensor dictionary, got {type(raw)!r}."
         )
 
     if SPEAKER_EMBEDDING_KEY in raw:
-        return raw
-    if "embedding" in raw:
-        return {SPEAKER_EMBEDDING_KEY: raw["embedding"]}
+        embedding = raw[SPEAKER_EMBEDDING_KEY]
+        if not isinstance(embedding, torch.Tensor):
+            raise ValueError(
+                f"Speaker inversion '{SPEAKER_EMBEDDING_KEY}' must be a tensor, "
+                f"got {type(embedding)!r}."
+            )
+        return {SPEAKER_EMBEDDING_KEY: embedding}
 
-    detail = "" if model_cfg is None else f" for speaker_dim={model_cfg.speaker_dim}"
-    raise ValueError(f"Speaker inversion file is missing '{SPEAKER_EMBEDDING_KEY}'{detail}.")
+    raise ValueError(f"Speaker inversion file is missing '{SPEAKER_EMBEDDING_KEY}'.")
 
 
 def normalize_speaker_inversion_payload(
-    raw: Any,
+    raw: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     payload = _extract_embedding_payload(raw)
     embedding = payload[SPEAKER_EMBEDDING_KEY]
@@ -152,10 +133,12 @@ def load_speaker_inversion_payload(
     path: str | Path,
 ) -> dict[str, torch.Tensor]:
     source = Path(path).expanduser()
-    if source.suffix.lower() == ".safetensors":
-        raw = load_safetensors_file(source, device="cpu")
-    else:
-        raw = torch.load(source, map_location="cpu", weights_only=True)
+    if not is_speaker_inversion_safetensors_path(source):
+        raise ValueError(
+            "Speaker Inversion embeddings must use the "
+            f"{SPEAKER_INVERSION_SAFETENSORS_SUFFIX!r} suffix: {source}"
+        )
+    raw = load_safetensors_file(source, device="cpu")
 
     out = normalize_speaker_inversion_payload(raw)
     return out
@@ -207,29 +190,8 @@ def save_speaker_inversion_checkpoint(
     path: str | Path,
     *,
     model: nn.Module,
-    model_cfg: ModelConfig,
-    train_cfg: TrainConfig,
-    step: int,
-    base_init: dict | None = None,
-    extra_state: dict | None = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = speaker_inversion_state_dict(model)
-    payload: dict[str, Any] = {
-        "format": SPEAKER_INVERSION_FORMAT,
-        "format_version": SPEAKER_INVERSION_FORMAT_VERSION,
-        "step": int(step),
-        "speaker_tokens": int(state[SPEAKER_EMBEDDING_KEY].shape[0]),
-        "speaker_dim": int(state[SPEAKER_EMBEDDING_KEY].shape[1]),
-        "model_config": asdict(model_cfg),
-        "train_config": asdict(train_cfg),
-        "base_init": base_init,
-        **state,
-    }
-    if extra_state:
-        payload.update(extra_state)
-    if is_speaker_inversion_safetensors_path(path):
-        save_speaker_inversion_safetensors(path, payload)
-        return
-    torch.save(payload, path)
+    save_speaker_inversion_safetensors(path, state)

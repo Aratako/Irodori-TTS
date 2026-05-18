@@ -148,14 +148,7 @@ def save_checkpoint(
 ) -> None:
     path = Path(path)
     if train_cfg.speaker_inversion_enabled:
-        save_speaker_inversion_checkpoint(
-            path,
-            model=model,
-            model_cfg=model_cfg,
-            train_cfg=train_cfg,
-            step=step,
-            base_init=base_init,
-        )
+        save_speaker_inversion_checkpoint(path, model=model)
         return
 
     if train_config_uses_lora(train_cfg):
@@ -1569,7 +1562,9 @@ def main() -> None:
     parser.add_argument(
         "--speaker-inversion-init-embedding",
         default=None,
-        help="Optional existing Speaker Inversion .pt checkpoint to continue from.",
+        help=(
+            "Optional existing Speaker Inversion .speaker.safetensors file to continue from."
+        ),
     )
     parser.add_argument(
         "--timestep-stratified",
