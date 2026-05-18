@@ -19,6 +19,7 @@ from irodori_tts.inference_runtime import (
     list_available_runtime_precisions,
     save_wav,
 )
+from irodori_tts.speaker_inversion import is_speaker_inversion_safetensors_path
 
 MAX_GRADIO_CANDIDATES = 32
 GRADIO_AUDIO_COLS_PER_ROW = 8
@@ -28,7 +29,11 @@ def _default_checkpoint() -> str:
     candidates = sorted(
         [
             *Path(".").glob("**/checkpoint_*.pt"),
-            *Path(".").glob("**/checkpoint_*.safetensors"),
+            *(
+                path
+                for path in Path(".").glob("**/checkpoint_*.safetensors")
+                if not is_speaker_inversion_safetensors_path(path)
+            ),
         ]
     )
     preferred = [
@@ -115,6 +120,10 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     checkpoint = str(raw_checkpoint).strip()
     if checkpoint == "":
         raise ValueError("checkpoint is required.")
+    if is_speaker_inversion_safetensors_path(checkpoint):
+        raise ValueError(
+            "Speaker embedding files cannot be used as model checkpoints."
+        )
 
     suffix = Path(checkpoint).suffix.lower()
     if suffix in {".pt", ".safetensors"}:
@@ -380,7 +389,7 @@ def build_ui() -> gr.Blocks:
 
         with gr.Row():
             checkpoint = gr.Textbox(
-                label="Checkpoint (.pt/.safetensors or HF repo id)",
+                label="Model Checkpoint (.pt/.safetensors or HF repo id)",
                 value=default_checkpoint,
                 scale=4,
             )
