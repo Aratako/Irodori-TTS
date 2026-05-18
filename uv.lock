@@ -1583,6 +1583,11 @@ dev = [
     { name = "ruff" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "dacvae", git = "https://github.com/facebookresearch/dacvae" },
@@ -1608,6 +1613,9 @@ requires-dist = [
     { name = "wandb", specifier = ">=0.17.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.15.2" }]
 
 [[package]]
 name = "itsdangerous"

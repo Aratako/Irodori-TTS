@@ -26,9 +26,9 @@ dependencies = [
     "wandb>=0.17.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "ruff>=0.9.0",
+    "ruff>=0.15.2",
 ]
 
 [tool.uv.sources]
