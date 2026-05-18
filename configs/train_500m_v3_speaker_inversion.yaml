@@ -49,8 +49,6 @@ train:
   speaker_inversion_tokens: 16 # free to change
   speaker_inversion_init_std: 0.02
   speaker_inversion_init_embedding:
-  speaker_inversion_uncond_mode: mask
-  speaker_inversion_uncond_std: 1.0
 
   batch_size: 16
   gradient_accumulation_steps: 1

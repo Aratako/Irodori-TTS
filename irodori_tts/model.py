@@ -1183,8 +1183,6 @@ class TextToLatentRFDiT(nn.Module):
         *,
         num_tokens: int,
         init_std: float,
-        uncond_mode: str = "mask",
-        uncond_std: float = 1.0,
         init_embedding: torch.Tensor | None = None,
     ) -> SpeakerInversionEmbedding:
         if not self.cfg.use_speaker_condition:
@@ -1193,8 +1191,6 @@ class TextToLatentRFDiT(nn.Module):
             num_tokens=int(num_tokens),
             speaker_dim=int(self.cfg.speaker_dim),
             init_std=float(init_std),
-            uncond_mode=uncond_mode,
-            uncond_std=float(uncond_std),
             init_embedding=init_embedding,
         )
         self.speaker_inversion = module
@@ -1271,19 +1267,6 @@ class TextToLatentRFDiT(nn.Module):
             mask = mask.to(device=state.device, dtype=torch.bool)
         return state, mask
 
-    def _speaker_inversion_uncond(
-        self,
-        *,
-        batch_size: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        module = getattr(self, "speaker_inversion", None)
-        if not isinstance(module, SpeakerInversionEmbedding):
-            return None, None
-        state, mask = module.unconditional(batch_size=batch_size, device=device, dtype=dtype)
-        return state, mask
-
     def _apply_speaker_condition_dropout(
         self,
         *,
@@ -1310,7 +1293,8 @@ class TextToLatentRFDiT(nn.Module):
             )
         if mode == "noise":
             if uncond_state is None:
-                uncond_state = torch.zeros_like(speaker_state)
+                scale = speaker_state.detach().std().clamp_min(1e-6)
+                uncond_state = torch.randn_like(speaker_state) * scale
             if uncond_mask is None:
                 uncond_mask = torch.ones_like(speaker_mask)
             uncond_state, uncond_mask = self._expand_speaker_condition_batch(
@@ -1416,17 +1400,12 @@ class TextToLatentRFDiT(nn.Module):
                     ref_state = self.speaker_encoder(ref_latent, ref_mask)
                     ref_state = self.speaker_norm(ref_state)
                     ref_state, ref_mask = self._prepend_masked_mean_token(ref_state, ref_mask)
-            speaker_uncond_state, speaker_uncond_mask = self._speaker_inversion_uncond(
-                batch_size=text_input_ids.shape[0],
-                device=text_state.device,
-                dtype=text_state.dtype,
-            )
             ref_state, ref_mask = self._apply_speaker_condition_dropout(
                 speaker_state=ref_state,
                 speaker_mask=ref_mask,
                 dropout_mask=speaker_condition_dropout,
-                uncond_state=speaker_uncond_state,
-                uncond_mask=speaker_uncond_mask,
+                uncond_state=None,
+                uncond_mask=None,
                 uncond_mode=speaker_uncond_mode,
             )
         caption_state = None
@@ -1549,24 +1528,13 @@ class TextToLatentRFDiT(nn.Module):
                 and speaker_state_dit is not None
                 and speaker_mask_dit is not None
             ):
-                speaker_uncond_state, speaker_uncond_mask = self._speaker_inversion_uncond(
-                    batch_size=text_input_ids.shape[0],
-                    device=speaker_state_dit.device,
-                    dtype=speaker_state_dit.dtype,
-                )
-                _inv_module = getattr(self, "speaker_inversion", None)
-                _uncond_mode = (
-                    _inv_module.uncond_mode
-                    if isinstance(_inv_module, SpeakerInversionEmbedding)
-                    else "mask"
-                )
                 speaker_state_dit, speaker_mask_dit = self._apply_speaker_condition_dropout(
                     speaker_state=speaker_state_dit,
                     speaker_mask=speaker_mask_dit,
                     dropout_mask=speaker_condition_dropout,
-                    uncond_state=speaker_uncond_state,
-                    uncond_mask=speaker_uncond_mask,
-                    uncond_mode=_uncond_mode,
+                    uncond_state=None,
+                    uncond_mask=None,
+                    uncond_mode="mask",
                 )
             if caption_condition_dropout is not None and caption_mask_dit is not None:
                 caption_mask_dit = caption_mask_dit.clone()

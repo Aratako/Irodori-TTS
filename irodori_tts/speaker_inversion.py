@@ -62,29 +62,18 @@ class SpeakerInversionEmbedding(nn.Module):
         num_tokens: int,
         speaker_dim: int,
         init_std: float,
-        uncond_mode: str = "mask",
-        uncond_std: float = 1.0,
         init_embedding: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         num_tokens = int(num_tokens)
         speaker_dim = int(speaker_dim)
         init_std = float(init_std)
-        uncond_std = float(uncond_std)
-        uncond_mode = str(uncond_mode).strip().lower()
         if num_tokens <= 0:
             raise ValueError(f"speaker inversion tokens must be > 0, got {num_tokens}")
         if speaker_dim <= 0:
             raise ValueError(f"speaker_dim must be > 0, got {speaker_dim}")
         if init_std < 0:
             raise ValueError(f"speaker inversion init_std must be >= 0, got {init_std}")
-        if uncond_std < 0:
-            raise ValueError(f"speaker inversion uncond_std must be >= 0, got {uncond_std}")
-        if uncond_mode not in SPEAKER_INVERSION_UNCOND_MODES:
-            raise ValueError(
-                "speaker inversion uncond mode must be one of "
-                f"{sorted(SPEAKER_INVERSION_UNCOND_MODES)}, got {uncond_mode!r}"
-            )
 
         if init_embedding is None:
             embedding = torch.randn(num_tokens, speaker_dim, dtype=torch.float32) * init_std
@@ -100,8 +89,6 @@ class SpeakerInversionEmbedding(nn.Module):
                     f"expected {num_tokens}, got {int(embedding.shape[0])}"
                 )
         self.embedding = nn.Parameter(embedding)
-        self.uncond_mode = uncond_mode
-        self.uncond_std = uncond_std
 
     @property
     def num_tokens(self) -> int:
@@ -124,31 +111,6 @@ class SpeakerInversionEmbedding(nn.Module):
             -1,
         )
         mask = torch.ones((int(batch_size), self.num_tokens), dtype=torch.bool, device=device)
-        return state, mask
-
-    def unconditional(
-        self,
-        *,
-        batch_size: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.uncond_mode == "noise":
-            state = torch.randn(
-                (int(batch_size), self.num_tokens, self.speaker_dim),
-                dtype=dtype,
-                device=device,
-            )
-            state = state * float(self.uncond_std)
-            mask = torch.ones((int(batch_size), self.num_tokens), dtype=torch.bool, device=device)
-            return state, mask
-
-        state = torch.zeros(
-            (int(batch_size), self.num_tokens, self.speaker_dim),
-            dtype=dtype,
-            device=device,
-        )
-        mask = torch.zeros((int(batch_size), self.num_tokens), dtype=torch.bool, device=device)
         return state, mask
 
 
@@ -254,13 +216,10 @@ def save_speaker_inversion_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = speaker_inversion_state_dict(model)
-    module = model.speaker_inversion
     payload: dict[str, Any] = {
         "format": SPEAKER_INVERSION_FORMAT,
         "format_version": SPEAKER_INVERSION_FORMAT_VERSION,
         "step": int(step),
-        "speaker_uncond_mode": module.uncond_mode,
-        "speaker_uncond_std": float(module.uncond_std),
         "speaker_tokens": int(state[SPEAKER_EMBEDDING_KEY].shape[0]),
         "speaker_dim": int(state[SPEAKER_EMBEDDING_KEY].shape[1]),
         "model_config": asdict(model_cfg),

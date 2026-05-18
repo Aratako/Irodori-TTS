@@ -361,8 +361,6 @@ embedding tokens. The output is a `.speaker.safetensors` file used at inference 
 | `speaker_inversion_tokens` / `--speaker-inversion-tokens` | `16` | Number of learned speaker embedding tokens. |
 | `speaker_inversion_init_std` / `--speaker-inversion-init-std` | `0.02` | Standard deviation for random initialization of the embedding tokens. |
 | `speaker_inversion_init_embedding` / `--speaker-inversion-init-embedding` | `None` | Path to an existing `.speaker.safetensors` to resume from or warm-start a new optimization. |
-| `speaker_inversion_uncond_mode` / `--speaker-inversion-uncond-mode` | `mask` | Unconditional branch mode for speaker CFG dropout during training. `mask`: zero tokens + false mask. `noise`: Gaussian noise scaled by `uncond_std`. Must match the intended inference `--speaker-uncond-mode`. |
-| `speaker_inversion_uncond_std` / `--speaker-inversion-uncond-std` | `1.0` | Noise standard deviation scale for unconditional tokens when `uncond_mode=noise`. |
 
 Use `--init-checkpoint` with the base model weights and `--manifest` with audio from the
 target speaker. All condition dropout values should be set to `0.0` so the embedding

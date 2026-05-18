@@ -54,7 +54,6 @@ from irodori_tts.rf import (
 from irodori_tts.speaker_inversion import (
     SPEAKER_EMBEDDING_KEY,
     SPEAKER_INVERSION_SAFETENSORS_SUFFIX,
-    SPEAKER_INVERSION_UNCOND_MODES,
     load_speaker_inversion_payload,
     save_speaker_inversion_checkpoint,
 )
@@ -1573,18 +1572,6 @@ def main() -> None:
         help="Optional existing Speaker Inversion .pt checkpoint to continue from.",
     )
     parser.add_argument(
-        "--speaker-inversion-uncond-mode",
-        choices=sorted(SPEAKER_INVERSION_UNCOND_MODES),
-        default=None,
-        help="Speaker CFG unconditional branch for Speaker Inversion.",
-    )
-    parser.add_argument(
-        "--speaker-inversion-uncond-std",
-        type=float,
-        default=None,
-        help="Stddev for fixed noise unconditional tokens when uncond-mode=noise.",
-    )
-    parser.add_argument(
         "--timestep-stratified",
         action="store_true",
         help="Use stratified logit-normal timestep sampling (Echo-style).",
@@ -1822,16 +1809,6 @@ def main() -> None:
             train_cfg,
             speaker_inversion_init_embedding=args.speaker_inversion_init_embedding,
         )
-    if cli_provided(raw_argv, "--speaker-inversion-uncond-mode"):
-        train_cfg = replace(
-            train_cfg,
-            speaker_inversion_uncond_mode=args.speaker_inversion_uncond_mode,
-        )
-    if cli_provided(raw_argv, "--speaker-inversion-uncond-std"):
-        train_cfg = replace(
-            train_cfg,
-            speaker_inversion_uncond_std=args.speaker_inversion_uncond_std,
-        )
     if cli_provided(raw_argv, "--timestep-stratified"):
         train_cfg = replace(train_cfg, timestep_stratified=True)
     if cli_provided(raw_argv, "--max-latent-steps"):
@@ -1974,18 +1951,6 @@ def main() -> None:
                 "speaker_inversion_init_std must be >= 0, "
                 f"got {train_cfg.speaker_inversion_init_std}"
             )
-        if train_cfg.speaker_inversion_uncond_std < 0:
-            raise ValueError(
-                "speaker_inversion_uncond_std must be >= 0, "
-                f"got {train_cfg.speaker_inversion_uncond_std}"
-            )
-        uncond_mode = str(train_cfg.speaker_inversion_uncond_mode).strip().lower()
-        if uncond_mode not in SPEAKER_INVERSION_UNCOND_MODES:
-            raise ValueError(
-                "speaker_inversion_uncond_mode must be one of "
-                f"{sorted(SPEAKER_INVERSION_UNCOND_MODES)}, got {uncond_mode!r}"
-            )
-        train_cfg = replace(train_cfg, speaker_inversion_uncond_mode=uncond_mode)
         optimizer_explicit = cli_provided(raw_argv, "--optimizer") or (
             isinstance(exp_cfg.get("train"), dict) and "optimizer" in exp_cfg.get("train", {})
         )
@@ -2471,8 +2436,6 @@ def main() -> None:
         speaker_inversion = raw_model.enable_speaker_inversion(
             num_tokens=train_cfg.speaker_inversion_tokens,
             init_std=train_cfg.speaker_inversion_init_std,
-            uncond_mode=train_cfg.speaker_inversion_uncond_mode,
-            uncond_std=train_cfg.speaker_inversion_uncond_std,
             init_embedding=init_embedding,
         )
         speaker_inversion.to(device)
