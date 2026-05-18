@@ -99,7 +99,7 @@ Use a learned Speaker Inversion embedding instead of reference audio:
 ```bash
 uv run python infer.py \
   --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
-  --speaker-embedding path/to/my.speaker.safetensors \
+  --ref-embed path/to/my.speaker.safetensors \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --output-wav outputs/sample_speaker_inversion.wav
 ```
@@ -170,13 +170,13 @@ uv run python infer.py \
 ```
 
 Speaker Inversion embedding checkpoints can be used with the same base model that
-was used for inversion training. Pass the embedding with `--speaker-embedding`;
+was used for inversion training. Pass the embedding with `--ref-embed`;
 it is mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`.
 
 ```bash
 uv run python infer.py \
   --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
-  --speaker-embedding outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
+  --ref-embed outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
   --text "こんにちは、私はAIです。これはSpeaker Inversion推論のテストです。" \
   --output-wav outputs/sample_speaker_inversion.wav
 ```
@@ -385,7 +385,7 @@ with the base model during inference:
 ```bash
 uv run python infer.py \
   --checkpoint path/to/Irodori-TTS-500M-v3.safetensors \
-  --speaker-embedding outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
+  --ref-embed outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
   --text "こんにちは、これは学習した話者埋め込みを使った推論です。" \
   --output-wav outputs/sample_speaker_inversion.wav
 ```
