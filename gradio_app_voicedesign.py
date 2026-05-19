@@ -121,9 +121,7 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     if checkpoint == "":
         raise ValueError("checkpoint is required.")
     if is_speaker_inversion_safetensors_path(checkpoint):
-        raise ValueError(
-            "Speaker embedding files cannot be used as model checkpoints."
-        )
+        raise ValueError("Speaker embedding files cannot be used as model checkpoints.")
 
     suffix = Path(checkpoint).suffix.lower()
     if suffix in {".pt", ".safetensors"}:

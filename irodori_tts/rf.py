@@ -5,6 +5,7 @@ import math
 import torch
 
 from .model import TextToLatentRFDiT
+from .speaker_inversion import SPEAKER_INVERSION_UNCOND_MODES
 
 
 def _make_rng(seed: int, device: torch.device) -> tuple[torch.Generator, torch.device]:
@@ -176,6 +177,12 @@ def sample_euler_rf_cfg(
     if not model.cfg.use_speaker_condition:
         cfg_scale_speaker = 0.0
         speaker_kv_scale = None
+    speaker_uncond_mode = str(speaker_uncond_mode).strip().lower()
+    if speaker_uncond_mode not in SPEAKER_INVERSION_UNCOND_MODES:
+        raise ValueError(
+            f"speaker_uncond_mode must be one of {sorted(SPEAKER_INVERSION_UNCOND_MODES)}, "
+            f"got {speaker_uncond_mode!r}"
+        )
 
     cfg_guidance_mode = str(cfg_guidance_mode).strip().lower()
     if cfg_guidance_mode not in {"independent", "joint", "alternating"}:
@@ -235,9 +242,16 @@ def sample_euler_rf_cfg(
             raise RuntimeError(
                 "Speaker conditioning is enabled but encoded speaker state is missing."
             )
-        effective_speaker_uncond_mode = str(speaker_uncond_mode).strip().lower()
-        if effective_speaker_uncond_mode == "noise":
-            speaker_state_uncond = torch.randn_like(speaker_state_cond) * speaker_state_cond.std().clamp_min(1e-6)
+        if speaker_uncond_mode == "noise":
+            speaker_noise = torch.randn(
+                speaker_state_cond.shape,
+                device=rng_device,
+                dtype=speaker_state_cond.dtype,
+                generator=rng,
+            )
+            if rng_device != device:
+                speaker_noise = speaker_noise.to(device=device)
+            speaker_state_uncond = speaker_noise * speaker_state_cond.std().clamp_min(1e-6)
             speaker_mask_uncond = torch.ones_like(speaker_mask_cond)
         else:
             speaker_state_uncond = torch.zeros_like(speaker_state_cond)

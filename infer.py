@@ -359,10 +359,7 @@ def main() -> None:
     ref_group.add_argument(
         "--ref-embed",
         default=None,
-        help=(
-            "Speaker Inversion embedding (.speaker.safetensors) path for speaker "
-            "conditioning."
-        ),
+        help=("Speaker Inversion embedding (.speaker.safetensors) path for speaker conditioning."),
     )
     ref_group.add_argument(
         "--no-ref",

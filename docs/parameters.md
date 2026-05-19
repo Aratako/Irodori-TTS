@@ -249,6 +249,7 @@ their natural lengths.
 | `precision` / `--precision` | `bf16` | Forward-pass compute precision. Weights and optimizer states remain FP32. |
 | `allow_tf32` / `--tf32` | `False` | Enables TF32 CUDA kernels for speed. |
 | `compile_model` / `--compile-model` | `False` | Enables `torch.compile` during training. |
+| `gradient_checkpointing` / `--gradient-checkpointing` | `False` | Enables activation checkpointing on diffusion blocks to reduce memory usage at the cost of extra compute. |
 | `optimizer` / `--optimizer` | `muon` | `muon` or `adamw`. |
 | `learning_rate` / `--lr` | `1e-4` | Base learning rate. |
 | `weight_decay` / `--weight-decay` | `0.01` | Weight decay for optimizer groups that use it. |

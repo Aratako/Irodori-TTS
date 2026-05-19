@@ -1230,7 +1230,12 @@ def run_validation(
                 v_target = rf_velocity_target(x0, noise)
 
             if model_cfg.use_speaker_condition:
-                use_speaker = has_speaker
+                if train_cfg.speaker_inversion_enabled:
+                    # Speaker Inversion learns one embedding for this run, so validation
+                    # should match training and treat every sample as speaker-conditioned.
+                    use_speaker = torch.ones((bsz,), device=device, dtype=torch.bool)
+                else:
+                    use_speaker = has_speaker
                 speaker_condition_dropout = ~use_speaker
                 duration_has_speaker = use_speaker
                 duration_features = set_duration_has_speaker_feature(
@@ -1562,9 +1567,7 @@ def main() -> None:
     parser.add_argument(
         "--speaker-inversion-init-embedding",
         default=None,
-        help=(
-            "Optional existing Speaker Inversion .speaker.safetensors file to continue from."
-        ),
+        help=("Optional existing Speaker Inversion .speaker.safetensors file to continue from."),
     )
     parser.add_argument(
         "--timestep-stratified",
