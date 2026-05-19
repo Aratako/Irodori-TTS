@@ -56,8 +56,10 @@ cd Irodori-TTS
 uv sync
 ```
 
-**Note**: `uv sync` installs the default dependency set using the default PyPI
-resolution path. It may still install PyTorch through transitive dependencies.
+**Compatibility note**: `uv sync` installs the default dependency set using the
+default PyPI resolution path. It may still install PyTorch through transitive
+dependencies. To explicitly use the PyTorch CUDA 12.8 index on NVIDIA GPUs, run
+`uv sync --extra cu128`.
 
 If you want to explicitly select a PyTorch backend, use one of the backend
 extras below:
