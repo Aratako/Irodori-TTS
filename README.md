@@ -53,10 +53,14 @@ Audio is represented as continuous latent sequences via the codec configured by 
 ```bash
 git clone https://github.com/Aratako/Irodori-TTS.git
 cd Irodori-TTS
-uv sync --extra cu128
+uv sync
 ```
 
-**Note**: Select the PyTorch backend that matches your environment:
+**Note**: `uv sync` installs the default dependency set using the default PyPI
+resolution path. It may still install PyTorch through transitive dependencies.
+
+If you want to explicitly select a PyTorch backend, use one of the backend
+extras below:
 
 ```bash
 # NVIDIA CUDA 12.8 on Linux/Windows
@@ -69,9 +73,10 @@ uv sync --extra rocm
 uv sync --extra cpu
 ```
 
-The PyTorch backend extras are mutually exclusive. ROCm wheels are installed
-from the PyTorch ROCm index and are only enabled on Linux. On macOS, the `cpu`
-extra falls back to the standard PyPI PyTorch wheels.
+The PyTorch backend extras are mutually exclusive. The `cu128` extra uses the
+PyTorch CUDA 12.8 index, and the `rocm` extra uses the PyTorch ROCm index on
+Linux. The `cpu` extra uses the CPU PyTorch index on Linux/Windows and falls
+back to the standard PyPI PyTorch wheels on macOS.
 
 ## Quick Start
 
