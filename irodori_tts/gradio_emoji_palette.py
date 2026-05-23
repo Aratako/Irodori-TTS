@@ -119,7 +119,12 @@ _INSERT_EMOJI_ON_POINTER_DOWN = (
     "const end=focused&&typeof input.selectionEnd==='number'?input.selectionEnd:text.length;"
     "const next=text.slice(0,start)+emoji+text.slice(end);"
     "const caret=start+emoji.length;"
-    "input.value=next;"
+    # Why: Svelte や React などのSPAフレームワークでは、直接 value を書き換えても
+    #      内部状態が同期されない（バインディングが検知しない）ことがあるため、
+    #      ネイティブのセッタープロパティを明示的に呼び出して更新を反映させる。
+    "const prototype=input.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;"
+    "const setter=Object.getOwnPropertyDescriptor(prototype,'value').set;"
+    "if(setter)setter.call(input,next);else input.value=next;"
     "input.focus({preventScroll:true});"
     "input.setSelectionRange(caret,caret);"
     "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -158,5 +163,11 @@ def _emoji_palette_html(textbox: gr.Textbox) -> str:
 
 
 def build_emoji_palette(textbox: gr.Textbox, *, open: bool = True) -> None:
+    # Why: Gradio 4/5以降では、elem_id が明示的に設定されていないコンポーネントに
+    #      HTML の id 属性（"component-XX"）が割り当てられなくなったため、
+    #      JavaScriptで検索可能にするために一意の elem_id を自動で割り当てる。
+    #      これにより、個別の画面定義側（gradio_ref.py など）のコードを変更せずに済む。
+    if not getattr(textbox, "elem_id", None):
+        textbox.elem_id = f"irodori-text-input-{textbox._id}"
     with gr.Accordion("Emoji Palette", open=open, elem_classes=["emoji-palette"]):
         gr.HTML(_emoji_palette_html(textbox))
