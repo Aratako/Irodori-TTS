@@ -529,7 +529,6 @@ def _run_generation(
         model_precision=model_precision,
         codec_device=codec_device,
         codec_precision=codec_precision,
-        enable_watermark=enable_watermark,
     )
 
     text_value = str(text).strip()
