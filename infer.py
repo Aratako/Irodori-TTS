@@ -16,8 +16,6 @@ from irodori_tts.inference_runtime import (
     save_wav,
 )
 
-FIXED_SECONDS = 30.0
-
 
 def _parse_optional_float(value: str) -> float | None:
     raw = str(value).strip().lower()
@@ -80,6 +78,14 @@ def main() -> None:
             "(e.g. your-org/your-model)."
         ),
     )
+    parser.add_argument(
+        "--lora-adapter",
+        default=None,
+        help=(
+            "Optional PEFT LoRA adapter directory to load dynamically for this inference run. "
+            "The adapter is applied at runtime and is not merged into the base checkpoint."
+        ),
+    )
     parser.add_argument("--text", required=True)
     parser.add_argument(
         "--caption",
@@ -119,13 +125,7 @@ def main() -> None:
         "--codec-deterministic-decode",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use deterministic DACVAE decode watermark-message path (default: enabled).",
-    )
-    parser.add_argument(
-        "--enable-watermark",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Enable DACVAE watermark branch during decode (default: disabled).",
+        help="Use deterministic DACVAE decode path (default: enabled).",
     )
     parser.add_argument(
         "--max-ref-seconds",
@@ -172,6 +172,33 @@ def main() -> None:
         ),
     )
     parser.add_argument("--num-steps", type=int, default=40)
+    parser.add_argument(
+        "--t-schedule-mode",
+        choices=["linear", "sway"],
+        default="linear",
+        help="Timestep schedule for RF Euler sampling.",
+    )
+    parser.add_argument(
+        "--sway-coeff",
+        type=float,
+        default=-1.0,
+        help="Sway Sampling coefficient used when --t-schedule-mode=sway.",
+    )
+    parser.add_argument(
+        "--seconds",
+        type=float,
+        default=None,
+        help=(
+            "Manual output duration in seconds. If omitted, duration-enabled checkpoints "
+            "predict duration automatically; older checkpoints fall back to 30s."
+        ),
+    )
+    parser.add_argument(
+        "--duration-scale",
+        type=float,
+        default=1.0,
+        help="Scale predicted duration when --seconds is omitted (>1 longer, <1 shorter).",
+    )
     parser.add_argument(
         "--num-candidates",
         type=int,
@@ -283,6 +310,16 @@ def main() -> None:
         help="Apply speaker KV scaling only to first N diffusion layers (default: all layers).",
     )
     parser.add_argument(
+        "--speaker-uncond-mode",
+        choices=["mask", "noise"],
+        default="mask",
+        help=(
+            "Unconditional speaker embedding formulation for speaker-conditioned checkpoints. "
+            "'mask': zero out the embedding (default, lower VRAM). "
+            "'noise': replace with Gaussian noise of the same stddev as the reference embedding."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -310,10 +347,19 @@ def main() -> None:
     )
     ref_group = parser.add_mutually_exclusive_group(required=False)
     ref_group.add_argument(
-        "--ref-wav", default=None, help="Reference waveform path for speaker conditioning."
+        "--ref-wav",
+        default=None,
+        help="Reference waveform path for speaker conditioning.",
     )
     ref_group.add_argument(
-        "--ref-latent", default=None, help="Reference latent (.pt) path for speaker conditioning."
+        "--ref-latent",
+        default=None,
+        help="Reference latent (.pt) path for speaker conditioning.",
+    )
+    ref_group.add_argument(
+        "--ref-embed",
+        default=None,
+        help=("Speaker Inversion embedding (.speaker.safetensors) path for speaker conditioning."),
     )
     ref_group.add_argument(
         "--no-ref",
@@ -334,16 +380,19 @@ def main() -> None:
             codec_precision=str(args.codec_precision),
             codec_deterministic_encode=bool(args.codec_deterministic_encode),
             codec_deterministic_decode=bool(args.codec_deterministic_decode),
-            enable_watermark=bool(args.enable_watermark),
             compile_model=bool(args.compile_model),
             compile_dynamic=bool(args.compile_dynamic),
         )
     )
     if runtime.model_cfg.use_speaker_condition and not (
-        args.no_ref or args.ref_wav is not None or args.ref_latent is not None
+        args.no_ref
+        or args.ref_wav is not None
+        or args.ref_latent is not None
+        or args.ref_embed is not None
     ):
         parser.error(
-            "speaker-conditioned checkpoints require one of --ref-wav, --ref-latent, or --no-ref."
+            "speaker-conditioned checkpoints require one of --ref-wav, --ref-latent, "
+            "--ref-embed, or --no-ref."
         )
     cfg_scale_text, cfg_scale_caption, cfg_scale_speaker, scale_messages = resolve_cfg_scales(
         cfg_guidance_mode=str(args.cfg_guidance_mode),
@@ -367,12 +416,14 @@ def main() -> None:
             caption=None if args.caption is None else str(args.caption),
             ref_wav=args.ref_wav,
             ref_latent=args.ref_latent,
+            ref_embed=args.ref_embed,
             no_ref=bool(args.no_ref),
             ref_normalize_db=args.ref_normalize_db,
             ref_ensure_max=bool(args.ref_ensure_max),
             num_candidates=int(args.num_candidates),
             decode_mode=str(args.decode_mode),
-            seconds=FIXED_SECONDS,
+            seconds=None if args.seconds is None else float(args.seconds),
+            duration_scale=float(args.duration_scale),
             max_ref_seconds=float(args.max_ref_seconds)
             if args.max_ref_seconds is not None
             else None,
@@ -401,11 +452,15 @@ def main() -> None:
             speaker_kv_max_layers=None
             if args.speaker_kv_max_layers is None
             else int(args.speaker_kv_max_layers),
+            speaker_uncond_mode=str(args.speaker_uncond_mode),
             seed=None if args.seed is None else int(args.seed),
+            t_schedule_mode=str(args.t_schedule_mode),
+            sway_coeff=float(args.sway_coeff),
             trim_tail=bool(args.trim_tail),
             tail_window_size=int(args.tail_window_size),
             tail_std_threshold=float(args.tail_std_threshold),
             tail_mean_threshold=float(args.tail_mean_threshold),
+            lora_adapter=None if args.lora_adapter is None else str(args.lora_adapter),
         ),
         log_fn=None,
     )

@@ -263,6 +263,21 @@ def _checkpoint_uses_caption_condition(
     )
 
 
+def _checkpoint_uses_duration_predictor(
+    checkpoint_model_cfg: dict | None,
+    state_dict: dict[str, torch.Tensor],
+) -> bool:
+    if checkpoint_model_cfg is not None:
+        checkpoint_cfg = merge_dataclass_overrides(
+            ModelConfig(),
+            checkpoint_model_cfg,
+            section="checkpoint model_config",
+        )
+        if checkpoint_cfg.use_duration_predictor:
+            return True
+    return any(key.startswith("duration_predictor.") for key in state_dict)
+
+
 def _is_caption_only_parameter(key: str) -> bool:
     return (
         key.startswith("caption_encoder.")
@@ -279,6 +294,10 @@ def _is_speaker_only_parameter(key: str) -> bool:
         or ".wk_speaker." in key
         or ".wv_speaker." in key
     )
+
+
+def _is_duration_only_parameter(key: str) -> bool:
+    return key.startswith("duration_predictor.")
 
 
 def _load_model_state_partially(
@@ -306,28 +325,41 @@ def _load_model_state_partially(
     return missing_keys, skipped_shape, skipped_extra
 
 
-def _validate_caption_upgrade_partial_load(
+def _validate_checkpoint_upgrade_partial_load(
     checkpoint_path: Path,
     missing_keys: list[str],
     skipped_shape: list[str],
     skipped_extra: list[str],
+    *,
+    allow_caption_missing: bool,
+    allow_duration_missing: bool,
+    allow_speaker_extra: bool,
 ) -> None:
     if skipped_shape:
         raise ValueError(
-            "Checkpoint/config shape mismatch while upgrading caption conditioning: "
+            "Checkpoint/config shape mismatch while upgrading checkpoint config: "
             f"{checkpoint_path} skipped_shape={skipped_shape[:8]}"
         )
-    non_speaker_extra = [key for key in skipped_extra if not _is_speaker_only_parameter(key)]
-    if non_speaker_extra:
+
+    unexpected_extra = skipped_extra
+    if allow_speaker_extra:
+        unexpected_extra = [key for key in unexpected_extra if not _is_speaker_only_parameter(key)]
+    if unexpected_extra:
         raise ValueError(
-            "Unexpected checkpoint keys while upgrading caption conditioning: "
-            f"{checkpoint_path} skipped_extra={non_speaker_extra[:8]}"
+            "Unexpected checkpoint keys while upgrading checkpoint config: "
+            f"{checkpoint_path} skipped_extra={unexpected_extra[:8]}"
         )
-    non_caption_missing = [key for key in missing_keys if not _is_caption_only_parameter(key)]
-    if non_caption_missing:
+
+    def _allowed_missing(key: str) -> bool:
+        return (allow_caption_missing and _is_caption_only_parameter(key)) or (
+            allow_duration_missing and _is_duration_only_parameter(key)
+        )
+
+    unexpected_missing = [key for key in missing_keys if not _allowed_missing(key)]
+    if unexpected_missing:
         raise ValueError(
-            "Partial init from caption-free checkpoint left non-caption parameters missing: "
-            f"{checkpoint_path} missing={non_caption_missing[:8]}"
+            "Partial init from checkpoint left unexpected parameters missing: "
+            f"{checkpoint_path} missing={unexpected_missing[:8]}"
         )
 
 
@@ -344,21 +376,34 @@ def _load_adapter_checkpoint(
     model = TextToLatentRFDiT(resolved_model_cfg)
     checkpoint_has_caption = _checkpoint_uses_caption_condition(base_model_cfg, base_state)
     current_has_caption = bool(resolved_model_cfg.use_caption_condition)
+    checkpoint_has_duration = _checkpoint_uses_duration_predictor(base_model_cfg, base_state)
+    current_has_duration = bool(resolved_model_cfg.use_duration_predictor)
     if checkpoint_has_caption and not current_has_caption:
         raise ValueError(
             "Caption-conditioned base checkpoint cannot initialize a caption-free adapter config."
         )
-    if current_has_caption and not checkpoint_has_caption:
+    if checkpoint_has_duration and not current_has_duration:
+        raise ValueError(
+            "Duration-predictor base checkpoint cannot initialize a duration-free adapter config."
+        )
+    upgrade_caption = current_has_caption and not checkpoint_has_caption
+    upgrade_duration = current_has_duration and not checkpoint_has_duration
+    if upgrade_caption or upgrade_duration:
         missing_keys, skipped_shape, skipped_extra = _load_model_state_partially(model, base_state)
-        _validate_caption_upgrade_partial_load(
+        _validate_checkpoint_upgrade_partial_load(
             base_path,
             missing_keys,
             skipped_shape,
             skipped_extra,
+            allow_caption_missing=upgrade_caption,
+            allow_duration_missing=upgrade_duration,
+            allow_speaker_extra=upgrade_caption,
         )
-        _initialize_caption_embedding_from_pretrained(model, resolved_model_cfg)
     else:
         model.load_state_dict(base_state, strict=True)
+
+    if upgrade_caption:
+        _initialize_caption_embedding_from_pretrained(model, resolved_model_cfg)
     peft_model = load_lora_adapter(model, adapter_dir, is_trainable=False)
     if not hasattr(peft_model, "merge_and_unload"):
         raise RuntimeError("Loaded PEFT adapter does not support merge_and_unload().")

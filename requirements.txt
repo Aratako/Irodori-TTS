@@ -9,6 +9,7 @@ pyyaml>=6.0
 safetensors>=0.7.0
 soundfile>=0.12.0
 sentencepiece>=0.1.99,<0.2
+silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152
 torch>=2.10.0
 torchaudio>=2.10.0
 torchcodec>=0.10.0

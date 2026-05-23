@@ -810,7 +810,7 @@ def main() -> None:
         "--codec-deterministic-decode",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use deterministic DACVAE decode watermark-message path (default: enabled).",
+        help="Use deterministic DACVAE decode path (default: enabled).",
     )
     parser.add_argument(
         "--normalize-db",

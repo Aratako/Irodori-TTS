@@ -8,6 +8,7 @@ from pathlib import Path
 import gradio as gr
 from huggingface_hub import hf_hub_download
 
+from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
 from irodori_tts.inference_runtime import (
     RuntimeKey,
     SamplingRequest,
@@ -18,8 +19,8 @@ from irodori_tts.inference_runtime import (
     list_available_runtime_precisions,
     save_wav,
 )
+from irodori_tts.speaker_inversion import is_speaker_inversion_safetensors_path
 
-FIXED_SECONDS = 30.0
 MAX_GRADIO_CANDIDATES = 32
 GRADIO_AUDIO_COLS_PER_ROW = 8
 
@@ -28,7 +29,11 @@ def _default_checkpoint() -> str:
     candidates = sorted(
         [
             *Path(".").glob("**/checkpoint_*.pt"),
-            *Path(".").glob("**/checkpoint_*.safetensors"),
+            *(
+                path
+                for path in Path(".").glob("**/checkpoint_*.safetensors")
+                if not is_speaker_inversion_safetensors_path(path)
+            ),
         ]
     )
     preferred = [
@@ -65,6 +70,10 @@ def _on_codec_device_change(device: str) -> gr.Dropdown:
     return gr.Dropdown(choices=choices, value=choices[0])
 
 
+def _on_t_schedule_mode_change(mode: str) -> object:
+    return gr.update(interactive=str(mode).strip().lower() == "sway")
+
+
 def _parse_optional_float(raw: str | None, label: str) -> float | None:
     if raw is None:
         return None
@@ -89,6 +98,15 @@ def _parse_optional_int(raw: str | None, label: str) -> int | None:
         raise ValueError(f"{label} must be an int or blank.") from exc
 
 
+def _parse_optional_str(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text == "" or text.lower() in {"none", "null", "off", "disable", "disabled", "base"}:
+        return None
+    return text
+
+
 def _format_timings(stage_timings: list[tuple[str, float]], total_to_decode: float) -> str:
     lines = [
         "[timing] ---- request ----",
@@ -102,6 +120,8 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     checkpoint = str(raw_checkpoint).strip()
     if checkpoint == "":
         raise ValueError("checkpoint is required.")
+    if is_speaker_inversion_safetensors_path(checkpoint):
+        raise ValueError("Speaker embedding files cannot be used as model checkpoints.")
 
     suffix = Path(checkpoint).suffix.lower()
     if suffix in {".pt", ".safetensors"}:
@@ -118,7 +138,6 @@ def _build_runtime_key(
     model_precision: str,
     codec_device: str,
     codec_precision: str,
-    enable_watermark: bool,
 ) -> RuntimeKey:
     checkpoint_path = _resolve_checkpoint_path(checkpoint)
     return RuntimeKey(
@@ -128,7 +147,6 @@ def _build_runtime_key(
         model_precision=str(model_precision),
         codec_device=str(codec_device),
         codec_precision=str(codec_precision),
-        enable_watermark=bool(enable_watermark),
         compile_model=False,
         compile_dynamic=False,
     )
@@ -140,7 +158,6 @@ def _describe_runtime(
     model_precision: str,
     codec_device: str,
     codec_precision: str,
-    enable_watermark: bool,
 ) -> str:
     runtime_key = _build_runtime_key(
         checkpoint=checkpoint,
@@ -148,7 +165,6 @@ def _describe_runtime(
         model_precision=model_precision,
         codec_device=codec_device,
         codec_precision=codec_precision,
-        enable_watermark=enable_watermark,
     )
     runtime, reloaded = get_cached_runtime(runtime_key)
     status = (
@@ -184,12 +200,15 @@ def _run_generation(
     model_precision: str,
     codec_device: str,
     codec_precision: str,
-    enable_watermark: bool,
     text: str,
     caption: str,
     num_steps: int,
     num_candidates: int,
     seed_raw: str,
+    seconds_raw: str,
+    duration_scale: float,
+    t_schedule_mode: str,
+    sway_coeff: float,
     cfg_guidance_mode: str,
     cfg_scale_text: float,
     cfg_scale_caption: float,
@@ -202,6 +221,7 @@ def _run_generation(
     truncation_factor_raw: str,
     rescale_k_raw: str,
     rescale_sigma_raw: str,
+    lora_adapter_raw: str,
 ) -> tuple[object, ...]:
     def stdout_log(msg: str) -> None:
         print(msg, flush=True)
@@ -212,7 +232,6 @@ def _run_generation(
         model_precision=model_precision,
         codec_device=codec_device,
         codec_precision=codec_precision,
-        enable_watermark=enable_watermark,
     )
 
     text_value = str(text).strip()
@@ -234,6 +253,8 @@ def _run_generation(
     rescale_k = _parse_optional_float(rescale_k_raw, "rescale_k")
     rescale_sigma = _parse_optional_float(rescale_sigma_raw, "rescale_sigma")
     seed = _parse_optional_int(seed_raw, "seed")
+    manual_seconds = _parse_optional_float(seconds_raw, "seconds")
+    lora_adapter = _parse_optional_str(lora_adapter_raw)
 
     runtime, reloaded = get_cached_runtime(runtime_key)
     if not runtime.model_cfg.use_caption_condition:
@@ -245,15 +266,17 @@ def _run_generation(
     stdout_log(
         (
             "[gradio-caption] request: model_device={} model_precision={} codec_device={} codec_precision={} "
-            "watermark={} mode={} seconds={} steps={} seed={} candidates={}"
+            "mode={} schedule={} sway_coeff={} seconds={} duration_scale={} steps={} seed={} candidates={}"
         ).format(
             model_device,
             model_precision,
             codec_device,
             codec_precision,
-            enable_watermark,
             cfg_guidance_mode,
-            FIXED_SECONDS,
+            t_schedule_mode,
+            sway_coeff,
+            "auto" if manual_seconds is None else manual_seconds,
+            duration_scale,
             num_steps,
             "random" if seed is None else seed,
             requested_candidates,
@@ -277,7 +300,8 @@ def _run_generation(
             ref_ensure_max=True,
             num_candidates=requested_candidates,
             decode_mode="sequential",
-            seconds=FIXED_SECONDS,
+            seconds=manual_seconds,
+            duration_scale=float(duration_scale),
             max_ref_seconds=30.0,
             max_text_len=max_text_len,
             max_caption_len=max_caption_len,
@@ -297,7 +321,10 @@ def _run_generation(
             speaker_kv_scale=None,
             speaker_kv_min_t=None,
             speaker_kv_max_layers=None,
+            t_schedule_mode=str(t_schedule_mode),
+            sway_coeff=float(sway_coeff),
             trim_tail=True,
+            lora_adapter=lora_adapter,
         ),
         log_fn=stdout_log,
     )
@@ -360,7 +387,7 @@ def build_ui() -> gr.Blocks:
 
         with gr.Row():
             checkpoint = gr.Textbox(
-                label="Checkpoint (.pt/.safetensors or HF repo id)",
+                label="Model Checkpoint (.pt/.safetensors or HF repo id)",
                 value=default_checkpoint,
                 scale=4,
             )
@@ -388,14 +415,19 @@ def build_ui() -> gr.Blocks:
                 value=codec_precision_choices[0],
                 scale=1,
             )
-            enable_watermark = gr.State(False)
 
         with gr.Row():
             load_model_btn = gr.Button("Load Model")
             clear_cache_btn = gr.Button("Unload Model")
             clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
 
-        text = gr.Textbox(label="Text", lines=4)
+        with gr.Column():
+            text = gr.Textbox(
+                label="Text",
+                lines=6,
+                elem_id="irodori-voicedesign-text-input",
+            )
+            build_emoji_palette(text, open=False)
         caption = gr.Textbox(
             label="Caption / Style Prompt (optional)",
             lines=4,
@@ -412,6 +444,29 @@ def build_ui() -> gr.Blocks:
                     step=1,
                 )
                 seed_raw = gr.Textbox(label="Seed (blank=random)", value="")
+                seconds_raw = gr.Textbox(label="Seconds (blank=auto)", value="")
+                duration_scale = gr.Slider(
+                    label="Duration Scale",
+                    minimum=0.5,
+                    maximum=1.5,
+                    value=1.0,
+                    step=0.01,
+                )
+
+            with gr.Row():
+                t_schedule_mode = gr.Dropdown(
+                    label="Time Schedule",
+                    choices=["linear", "sway"],
+                    value="linear",
+                )
+                sway_coeff = gr.Slider(
+                    label="Sway Coeff",
+                    minimum=-1.0,
+                    maximum=1.5,
+                    value=-1.0,
+                    step=0.1,
+                    interactive=False,
+                )
 
             with gr.Row():
                 cfg_guidance_mode = gr.Dropdown(
@@ -447,6 +502,7 @@ def build_ui() -> gr.Blocks:
                 truncation_factor_raw = gr.Textbox(label="Truncation Factor (optional)", value="")
                 rescale_k_raw = gr.Textbox(label="Rescale k (optional)", value="")
                 rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
+            lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value="")
 
         generate_btn = gr.Button("Generate", variant="primary")
 
@@ -481,12 +537,15 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
                 text,
                 caption,
                 num_steps,
                 num_candidates,
                 seed_raw,
+                seconds_raw,
+                duration_scale,
+                t_schedule_mode,
+                sway_coeff,
                 cfg_guidance_mode,
                 cfg_scale_text,
                 cfg_scale_caption,
@@ -499,6 +558,7 @@ def build_ui() -> gr.Blocks:
                 truncation_factor_raw,
                 rescale_k_raw,
                 rescale_sigma_raw,
+                lora_adapter_raw,
             ],
             outputs=[*out_audios, out_log, out_timing],
         )
@@ -507,6 +567,9 @@ def build_ui() -> gr.Blocks:
         )
         codec_device.change(
             _on_codec_device_change, inputs=[codec_device], outputs=[codec_precision]
+        )
+        t_schedule_mode.change(
+            _on_t_schedule_mode_change, inputs=[t_schedule_mode], outputs=[sway_coeff]
         )
 
         load_model_btn.click(
@@ -517,7 +580,6 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
             ],
             outputs=[clear_cache_msg],
         )
@@ -543,6 +605,7 @@ def main() -> None:
         server_port=args.server_port,
         share=bool(args.share),
         debug=bool(args.debug),
+        css=EMOJI_PALETTE_CSS,
     )
 
 
