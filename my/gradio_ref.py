@@ -48,6 +48,7 @@ from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_pale
 #       build_ui() と _run_generation() は本ファイルで独自に再実装する。
 # --------------------------------------------------------------------------- #
 from gradio_app import (
+    FIXED_SECONDS,
     _build_runtime_key,
     _clear_runtime_cache,
     _default_checkpoint,
@@ -57,8 +58,10 @@ from gradio_app import (
     _load_model,
     _on_codec_device_change,
     _on_model_device_change,
+    _on_t_schedule_mode_change,
     _parse_optional_float,
     _parse_optional_int,
+    _parse_optional_str,
     _precision_choices_for_device,
     _resolve_ref_wav,
 )
@@ -455,6 +458,7 @@ def _run_generation(
     model_precision: str,
     codec_device: str,
     codec_precision: str,
+    enable_watermark: bool,
     text: str,
     uploaded_audio: str | None,
     num_steps: int,
@@ -472,6 +476,12 @@ def _run_generation(
     speaker_kv_scale_raw: str,
     speaker_kv_min_t_raw: str,
     speaker_kv_max_layers_raw: str,
+    # Why: v3 で追加された新サンプリングパラメータを UI から受け取るため、引数を追加する。
+    seconds_raw: str,
+    duration_scale: float,
+    t_schedule_mode: str,
+    sway_coeff: float,
+    lora_adapter_raw: str,
     autoplay: bool,
     forever: bool,
     history_paths: list[str],
@@ -494,6 +504,7 @@ def _run_generation(
 
     Args:
         checkpoint〜speaker_kv_max_layers_raw: サンプリング関連パラメータ
+        seconds_raw〜lora_adapter_raw: v3 新サンプリングパラメータ
         autoplay:      最新音声を自動再生するかどうか（初回値、以降はセッション変数を参照）
         forever:       連続生成モードかどうか（ボタンに応じて固定値が渡される）
         history_paths: 直近5件の wav パスリスト（gr.State から受け取る）
@@ -515,6 +526,7 @@ def _run_generation(
         model_precision=model_precision,
         codec_device=codec_device,
         codec_precision=codec_precision,
+        enable_watermark=enable_watermark,
     )
 
     text_value = str(text).strip()
@@ -530,6 +542,10 @@ def _run_generation(
     speaker_kv_min_t = _parse_optional_float(speaker_kv_min_t_raw, "speaker_kv_min_t")
     speaker_kv_max_layers = _parse_optional_int(speaker_kv_max_layers_raw, "speaker_kv_max_layers")
     seed = _parse_optional_int(seed_raw, "seed")
+
+    # Why: v3 で追加されたオプショナルパラメータのパースを行う。
+    manual_seconds = _parse_optional_float(seconds_raw, "seconds")
+    lora_adapter = _parse_optional_str(lora_adapter_raw)
 
     # 参照音声の解決
     # Why: uploaded_audio が None や空文字の場合は no-reference モードで推論する。
@@ -566,6 +582,7 @@ def _run_generation(
         "model_precision": str(model_precision),
         "codec_device": str(codec_device),
         "codec_precision": str(codec_precision),
+        "enable_watermark": bool(enable_watermark),
         "text": text_value,
         "num_steps": int(num_steps) if str(num_steps).isdigit() else 40,
         "seed_raw": str(seed_raw),
@@ -582,6 +599,11 @@ def _run_generation(
         "speaker_kv_scale_raw": str(speaker_kv_scale_raw),
         "speaker_kv_min_t_raw": str(speaker_kv_min_t_raw),
         "speaker_kv_max_layers_raw": str(speaker_kv_max_layers_raw),
+        "seconds_raw": str(seconds_raw),
+        "duration_scale": float(duration_scale),
+        "t_schedule_mode": str(t_schedule_mode),
+        "sway_coeff": float(sway_coeff),
+        "lora_adapter_raw": str(lora_adapter_raw),
         "autoplay": bool(autoplay),
     }
     save_last_settings(settings_to_save)
@@ -627,7 +649,9 @@ def _run_generation(
                 ref_ensure_max=True,
                 num_candidates=1,  # 常に1件だけ生成（候補グリッド廃止）
                 decode_mode="sequential",
-                seconds=None,
+                # Why: 秒数を自動予測 (Duration Predictor) もしくは手動指定 (manual_seconds) に対応させる。
+                seconds=manual_seconds,
+                duration_scale=float(duration_scale),
                 max_ref_seconds=30.0,
                 max_text_len=None,
                 num_steps=int(num_steps),
@@ -645,6 +669,10 @@ def _run_generation(
                 speaker_kv_scale=speaker_kv_scale,
                 speaker_kv_min_t=speaker_kv_min_t,
                 speaker_kv_max_layers=speaker_kv_max_layers,
+                # Why: 時間スケジュールモード、その係数、LoRAアコーディオンの指定値を追加する。
+                t_schedule_mode=str(t_schedule_mode),
+                sway_coeff=float(sway_coeff),
+                lora_adapter=lora_adapter,
                 trim_tail=True,
             ),
             log_fn=stdout_log,
@@ -847,7 +875,8 @@ def build_ui() -> gr.Blocks:
                 value=last_settings.get("codec_precision", codec_precision_choices[0]),
                 scale=1,
             )
-
+            # ウォーターマークは常にOFF（gr.State で非表示管理）
+            enable_watermark = gr.State(False)
 
         # --- モデル読み込み/解放ボタン ---
         with gr.Row():
@@ -940,6 +969,32 @@ def build_ui() -> gr.Blocks:
                 seed_raw = gr.Textbox(
                     label="Seed (blank=random)", value=last_settings.get("seed_raw", "")
                 )
+                # Why: v3 の Duration Predictor に合わせ、明示的な秒数指定および話速（Duration Scale）を調整可能にする。
+                seconds_raw = gr.Textbox(
+                    label="Seconds (blank=auto)", value=last_settings.get("seconds_raw", "")
+                )
+                duration_scale = gr.Slider(
+                    label="Duration Scale",
+                    minimum=0.5,
+                    maximum=1.5,
+                    value=last_settings.get("duration_scale", 1.0),
+                    step=0.01,
+                )
+
+            with gr.Row():
+                t_schedule_mode = gr.Dropdown(
+                    label="Time Schedule",
+                    choices=["linear", "sway"],
+                    value=last_settings.get("t_schedule_mode", "linear"),
+                )
+                sway_coeff = gr.Slider(
+                    label="Sway Coeff",
+                    minimum=-1.0,
+                    maximum=1.5,
+                    value=last_settings.get("sway_coeff", -1.0),
+                    step=0.1,
+                    interactive=False, # Time Schedule で sway を選択した時のみ有効化
+                )
 
             with gr.Row():
                 cfg_guidance_mode = gr.Dropdown(
@@ -1010,6 +1065,11 @@ def build_ui() -> gr.Blocks:
                     label="Speaker KV Max Layers (optional)",
                     value=last_settings.get("speaker_kv_max_layers_raw", ""),
                 )
+            # Why: 学習済みの追加話者スタイル (LoRA) を適用可能にするため、アダプタディレクトリのパス入力欄を設ける。
+            lora_adapter_raw = gr.Textbox(
+                label="LoRA Adapter Directory (optional)",
+                value=last_settings.get("lora_adapter_raw", ""),
+            )
 
         # --- 生成制御 ---
         # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
@@ -1134,6 +1194,7 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
+                enable_watermark,
                 text,
                 uploaded_audio,
                 num_steps,
@@ -1151,6 +1212,12 @@ def build_ui() -> gr.Blocks:
                 speaker_kv_scale_raw,
                 speaker_kv_min_t_raw,
                 speaker_kv_max_layers_raw,
+                # Why: v3 新パラメータを _run_generation 引数の順序に合わせて追加する。
+                seconds_raw,
+                duration_scale,
+                t_schedule_mode,
+                sway_coeff,
+                lora_adapter_raw,
                 autoplay,
                 forever_state,
                 history_state,
@@ -1273,6 +1340,13 @@ def build_ui() -> gr.Blocks:
             _on_codec_device_change, inputs=[codec_device], outputs=[codec_precision]
         )
 
+        # Time Schedule 変更時に sway_coeff の有効/無効を切り替える
+        # Why: linear のときは sway_coeff を無効 (interactive=False) にし、
+        #      sway のときのみ有効 (interactive=True) に制御するため。
+        t_schedule_mode.change(
+            _on_t_schedule_mode_change, inputs=[t_schedule_mode], outputs=[sway_coeff]
+        )
+
         # モデル読み込み/解放
         # Why: 参照音声版は _load_model を使用（VoiceDesign版の _describe_runtime とは異なり、
         #      caption conditioning チェックを行わないシンプルな読み込み関数）
@@ -1284,6 +1358,7 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
+                enable_watermark,
             ],
             outputs=[clear_cache_msg],
         )
@@ -1304,6 +1379,11 @@ def build_ui() -> gr.Blocks:
             c_device = s.get("codec_device", default_codec_device)
             if c_device not in device_choices:
                 c_device = default_codec_device
+
+            # Why: リロード時に t_schedule_mode が sway であれば sway_coeff を interactive=True に、
+            #      linear であれば interactive=False に設定する。
+            t_mode = s.get("t_schedule_mode", "linear")
+            is_sway = str(t_mode).strip().lower() == "sway"
 
             return [
                 s.get("checkpoint", default_checkpoint),
@@ -1327,6 +1407,12 @@ def build_ui() -> gr.Blocks:
                 s.get("speaker_kv_scale_raw", ""),
                 s.get("speaker_kv_min_t_raw", "0.9"),
                 s.get("speaker_kv_max_layers_raw", ""),
+                # Why: v3 サンプリングパラメータを UI 復元リストに追加する。
+                s.get("seconds_raw", ""),
+                s.get("duration_scale", 1.0),
+                t_mode,
+                gr.update(value=s.get("sway_coeff", -1.0), interactive=is_sway),
+                s.get("lora_adapter_raw", ""),
                 s.get("autoplay", True),
             ]
 
@@ -1356,6 +1442,12 @@ def build_ui() -> gr.Blocks:
                 speaker_kv_scale_raw,
                 speaker_kv_min_t_raw,
                 speaker_kv_max_layers_raw,
+                # Why: UI リロード時に復元する v3 新パラメータを outputs リストに追加する。
+                seconds_raw,
+                duration_scale,
+                t_schedule_mode,
+                sway_coeff,
+                lora_adapter_raw,
                 autoplay,
             ],
         )
