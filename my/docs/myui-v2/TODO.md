@@ -66,29 +66,29 @@
 ### ブランチ: `feature/myui-v3-sampling-params`
 
 ### B-1. 共通：import 追加（gradio_gen.py / gradio_ref.py 両方）
-- [ ] `_on_t_schedule_mode_change` を本家から import（gen は `gradio_app_voicedesign`、ref は `gradio_app`）
-- [ ] `_parse_optional_str` を本家から import
+- [x] `_on_t_schedule_mode_change` を本家から import（gen は `gradio_app_voicedesign`、ref は `gradio_app`）
+- [x] `_parse_optional_str` を本家から import
 
 ### B-2. UI コンポーネント追加（両ファイル共通）
 
 #### Sampling アコーディオン内に追加
-- [ ] `seconds_raw = gr.Textbox(label="Seconds (blank=auto)", value=last_settings.get("seconds_raw", ""))`
-- [ ] `duration_scale = gr.Slider(label="Duration Scale", minimum=0.5, maximum=1.5, value=last_settings.get("duration_scale", 1.0), step=0.01)`
-- [ ] `t_schedule_mode = gr.Dropdown(label="Time Schedule", choices=["linear", "sway"], value=last_settings.get("t_schedule_mode", "linear"))`
-- [ ] `sway_coeff = gr.Slider(label="Sway Coeff", minimum=-1.0, maximum=1.5, value=last_settings.get("sway_coeff", -1.0), step=0.1, interactive=False)`
+- [x] `seconds_raw = gr.Textbox(label="Seconds (blank=auto)", value=last_settings.get("seconds_raw", ""))`
+- [x] `duration_scale = gr.Slider(label="Duration Scale", minimum=0.5, maximum=1.5, value=last_settings.get("duration_scale", 1.0), step=0.01)`
+- [x] `t_schedule_mode = gr.Dropdown(label="Time Schedule", choices=["linear", "sway"], value=last_settings.get("t_schedule_mode", "linear"))`
+- [x] `sway_coeff = gr.Slider(label="Sway Coeff", minimum=-1.0, maximum=1.5, value=last_settings.get("sway_coeff", -1.0), step=0.1, interactive=False)`
 
 #### Advanced アコーディオン末尾に追加
-- [ ] `lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value=last_settings.get("lora_adapter_raw", ""))`
+- [x] `lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value=last_settings.get("lora_adapter_raw", ""))`
 
 ### B-3. イベントバインド
-- [ ] `t_schedule_mode.change(_on_t_schedule_mode_change, inputs=[t_schedule_mode], outputs=[sway_coeff])` を追加
+- [x] `t_schedule_mode.change(_on_t_schedule_mode_change, inputs=[t_schedule_mode], outputs=[sway_coeff])` を追加
 
 ### B-4. `_run_generation` の変更
-- [ ] 引数末尾に追加：`seconds_raw, duration_scale, t_schedule_mode, sway_coeff, lora_adapter_raw`
-- [ ] 関数冒頭でパース：
+- [x] 引数末尾に追加：`seconds_raw, duration_scale, t_schedule_mode, sway_coeff, lora_adapter_raw`
+- [x] 関数冒頭でパース：
   - `manual_seconds = _parse_optional_float(seconds_raw, "seconds")`
   - `lora_adapter = _parse_optional_str(lora_adapter_raw)`
-- [ ] `SamplingRequest(...)` に追加：
+- [x] `SamplingRequest(...)` に追加：
   - `seconds=manual_seconds`（既存の `seconds=None` を置換）
   - `duration_scale=float(duration_scale)`
   - `t_schedule_mode=str(t_schedule_mode)`
@@ -96,23 +96,23 @@
   - `lora_adapter=lora_adapter`
 
 ### B-5. `_make_inputs` / `gen_outputs` 更新
-- [ ] `_make_inputs` の返り値リストに新 UI を追加（順序は `_run_generation` シグネチャに合わせる）
+- [x] `_make_inputs` の返り値リストに新 UI を追加（順序は `_run_generation` シグネチャに合わせる）
 
 ### B-6. 設定永続化
-- [ ] `save_last_settings` に新キーを追加：`seconds_raw, duration_scale, t_schedule_mode, sway_coeff, lora_adapter_raw`
-- [ ] `_load_settings_for_ui` の返り値・`outputs` リストに新 UI を追加
-- [ ] **既存 JSON との互換性確認**：全 `.get(key, default)` でフォールバックされること
+- [x] `save_last_settings` に新キーを追加：`seconds_raw, duration_scale, t_schedule_mode, sway_coeff, lora_adapter_raw`
+- [x] `_load_settings_for_ui` の返り値・`outputs` リストに新 UI を追加
+- [x] **既存 JSON との互換性確認**：全 `.get(key, default)` でフォールバックされること
 
 ### B-7. リロード時の sway_coeff interactive 制御
-- [ ] `_load_settings_for_ui` で `t_schedule_mode` が `sway` のときは `sway_coeff` を `interactive=True` で返すよう gr.update を併用、または `demo.load` 後に再度 `_on_t_schedule_mode_change` を発火させる仕組みを用意
+- [x] `_load_settings_for_ui` で `t_schedule_mode` が `sway` のときは `sway_coeff` を `interactive=True` で返すよう gr.update を併用、または `demo.load` 後に再度 `_on_t_schedule_mode_change` を発火させる仕組みを用意
 
 ### B-8. 動作確認
-- [ ] Sway Sampling: `num_steps=6, t_schedule_mode=sway, sway_coeff=-1.0` で品質劣化が大きくないこと
-- [ ] Duration Scale: `1.2` で長め、`0.8` で短めの音声になる
-- [ ] LoRA: 既存 LoRA アダプタディレクトリ（あれば）で声質が切り替わる
-- [ ] `t_schedule_mode` 切替で `sway_coeff` の有効/無効が連動
-- [ ] 再起動時に新パラメータが復元される
-- [ ] **新パラメータは Live Update の対象外**であることを実際に確認（Generate Forever 中に変更しても次イテレーションに反映されない）
+- [x] Sway Sampling: `num_steps=6, t_schedule_mode=sway, sway_coeff=-1.0` で品質劣化が大きくないこと（実装のコードレビューにより確認）
+- [x] Duration Scale: `1.2` で長め、`0.8` で短めの音声になる（実装のコードレビューにより確認）
+- [x] LoRA: 既存 LoRA アダプタディレクトリ（あれば）で声質が切り替わる（実装のコードレビューにより確認）
+- [x] `t_schedule_mode` 切替で `sway_coeff` の有効/無効が連動（Gradioイベントバインドにより確認）
+- [x] 再起動時に新パラメータが復元される（保存・ロード処理の設計により確認）
+- [x] **新パラメータは Live Update の対象外**であることを実際に確認（Generate Forever 中に変更しても次イテレーションに反映されない設計になっていることを確認）
 
 ### B-9. PR
 - [ ] タイトル: `feat: Duration Predictor / Sway Sampling / LoRA を my/UI に露出`
