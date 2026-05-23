@@ -49,6 +49,7 @@ from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_pale
 # --------------------------------------------------------------------------- #
 from gradio_app import (
     _build_runtime_key,
+    _checkpoint_choices,
     _clear_runtime_cache,
     _default_checkpoint,
     _default_codec_device,
@@ -852,6 +853,25 @@ def build_ui() -> gr.Blocks:
     # 前回の設定を読み込む
     last_settings = load_last_settings()
 
+    # Why: 以前のデフォルトモデル（v2など）が設定ファイルに保存されている場合、
+    #      将来的に v4 などの新しいデフォルトが登場した際にも自動で最新のデフォルトに更新されるようにする。
+    #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
+    saved_checkpoint = last_settings.get("checkpoint", default_checkpoint)
+    if saved_checkpoint != default_checkpoint:
+        official_prefix = "Aratako/Irodori-TTS-500M-v"
+        if saved_checkpoint.startswith(official_prefix) and default_checkpoint.startswith(official_prefix):
+            try:
+                saved_ver_str = saved_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
+                default_ver_str = default_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
+                saved_ver = int(saved_ver_str)
+                default_ver = int(default_ver_str)
+                if saved_ver < default_ver:
+                    saved_checkpoint = default_checkpoint
+            except ValueError:
+                saved_checkpoint = default_checkpoint
+        elif saved_checkpoint == "Aratako/Irodori-TTS-500M-v2":
+            saved_checkpoint = default_checkpoint
+
     # 必須の選択肢を検証しながら復元
     saved_model_device = last_settings.get("model_device", default_model_device)
     if saved_model_device not in device_choices:
@@ -873,9 +893,11 @@ def build_ui() -> gr.Blocks:
 
         # --- モデル設定行 ---
         with gr.Row():
-            checkpoint = gr.Textbox(
+            checkpoint = gr.Dropdown(
                 label="Checkpoint (.pt/.safetensors or HF repo id)",
-                value=last_settings.get("checkpoint", default_checkpoint),
+                choices=_checkpoint_choices(),
+                value=saved_checkpoint,
+                allow_custom_value=True,
                 scale=4,
             )
             model_device = gr.Dropdown(
@@ -1410,6 +1432,25 @@ def build_ui() -> gr.Blocks:
             """
             s = load_last_settings()
 
+            # Why: 以前のデフォルトモデル（v2など）が設定ファイルに保存されている場合、
+            #      リロード時に古いモデルが読み込まれるのを防ぐため、自動的に最新のデフォルトに更新する。
+            #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
+            saved_checkpoint = s.get("checkpoint", default_checkpoint)
+            if saved_checkpoint != default_checkpoint:
+                official_prefix = "Aratako/Irodori-TTS-500M-v"
+                if saved_checkpoint.startswith(official_prefix) and default_checkpoint.startswith(official_prefix):
+                    try:
+                        saved_ver_str = saved_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
+                        default_ver_str = default_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
+                        saved_ver = int(saved_ver_str)
+                        default_ver = int(default_ver_str)
+                        if saved_ver < default_ver:
+                            saved_checkpoint = default_checkpoint
+                    except ValueError:
+                        saved_checkpoint = default_checkpoint
+                elif saved_checkpoint == "Aratako/Irodori-TTS-500M-v2":
+                    saved_checkpoint = default_checkpoint
+
             # 必須の選択肢を検証しながら復元
             m_device = s.get("model_device", default_model_device)
             if m_device not in device_choices:
@@ -1425,7 +1466,7 @@ def build_ui() -> gr.Blocks:
             is_sway = str(t_mode).strip().lower() == "sway"
 
             return [
-                s.get("checkpoint", default_checkpoint),
+                saved_checkpoint,
                 m_device,
                 s.get("model_precision", model_precision_choices[0]),
                 c_device,

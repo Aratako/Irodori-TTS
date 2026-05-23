@@ -48,6 +48,30 @@ def _default_checkpoint() -> str:
     return "Aratako/Irodori-TTS-500M-v2-VoiceDesign"
 
 
+def _checkpoint_choices() -> list[str]:
+    # Why: UIのドロップダウンで選択可能なチェックポイントの候補一覧を提供するため。
+    #      ローカルに存在するチェックポイントファイルと、公式の主要な HuggingFace リポジトリを選択肢として提示する。
+    candidates = sorted(
+        [
+            *Path(".").glob("**/checkpoint_*.pt"),
+            *(
+                path
+                for path in Path(".").glob("**/checkpoint_*.safetensors")
+                if not is_speaker_inversion_safetensors_path(path)
+            ),
+        ]
+    )
+    choices = [str(p) for p in candidates]
+
+    official_repos = [
+        "Aratako/Irodori-TTS-500M-v2-VoiceDesign",
+    ]
+    for repo in official_repos:
+        if repo not in choices:
+            choices.append(repo)
+    return choices
+
+
 def _default_model_device() -> str:
     return default_runtime_device()
 
@@ -386,9 +410,11 @@ def build_ui() -> gr.Blocks:
         )
 
         with gr.Row():
-            checkpoint = gr.Textbox(
+            checkpoint = gr.Dropdown(
                 label="Model Checkpoint (.pt/.safetensors or HF repo id)",
+                choices=_checkpoint_choices(),
                 value=default_checkpoint,
+                allow_custom_value=True,
                 scale=4,
             )
             model_device = gr.Dropdown(
