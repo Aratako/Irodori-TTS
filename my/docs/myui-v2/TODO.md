@@ -26,38 +26,38 @@
 ### ブランチ: `fix/myui-v3-import-break`
 
 ### A-1. `my/gradio_gen.py` の修正
-- [ ] [my/gradio_gen.py:34-48](../../gradio_gen.py#L34-L48) の import から `FIXED_SECONDS` を削除
-- [ ] [my/gradio_gen.py:604](../../gradio_gen.py#L604) の `seconds=FIXED_SECONDS` を `seconds=None` に変更
-- [ ] [my/gradio_gen.py:483-490](../../gradio_gen.py#L483-L490) の `_build_runtime_key(...)` 呼び出しから `enable_watermark=enable_watermark` を削除
-- [ ] [my/gradio_gen.py:815](../../gradio_gen.py#L815) の `enable_watermark = gr.State(False)` を削除
-- [ ] [my/gradio_gen.py:1181-1191](../../gradio_gen.py#L1181-L1191) の `_describe_runtime` の inputs から `enable_watermark` を削除
-- [ ] `_run_generation` シグネチャから `enable_watermark` 引数を削除
-- [ ] `_make_inputs` のリストから `enable_watermark` を削除
+- [x] [my/gradio_gen.py:34-48](../../gradio_gen.py#L34-L48) の import から `FIXED_SECONDS` を削除
+- [x] [my/gradio_gen.py:604](../../gradio_gen.py#L604) の `seconds=FIXED_SECONDS` を `seconds=None` に変更
+- [x] [my/gradio_gen.py:483-490](../../gradio_gen.py#L483-L490) の `_build_runtime_key(...)` 呼び出しから `enable_watermark=enable_watermark` を削除
+- [x] [my/gradio_gen.py:815](../../gradio_gen.py#L815) の `enable_watermark = gr.State(False)` を削除
+- [x] [my/gradio_gen.py:1181-1191](../../gradio_gen.py#L1181-L1191) の `_describe_runtime` の inputs から `enable_watermark` を削除
+- [x] `_run_generation` シグネチャから `enable_watermark` 引数を削除
+- [x] `_make_inputs` のリストから `enable_watermark` を削除
 
 ### A-2. `my/gradio_ref.py` の修正
-- [ ] [my/gradio_ref.py:41-56](../../gradio_ref.py#L41-L56) の import から `FIXED_SECONDS` を削除
-- [ ] [my/gradio_ref.py:624](../../gradio_ref.py#L624) の `seconds=FIXED_SECONDS` を `seconds=None` に変更
-- [ ] [my/gradio_ref.py:505-512](../../gradio_ref.py#L505-L512) の `_build_runtime_key(...)` 呼び出しから `enable_watermark=enable_watermark` を削除
-- [ ] [my/gradio_ref.py:845](../../gradio_ref.py#L845) 付近の `enable_watermark = gr.State(False)` を削除
-- [ ] `_load_model` の呼び出しから `enable_watermark` 引数を削除
-- [ ] `_run_generation` シグネチャから `enable_watermark` 引数を削除
-- [ ] `_make_inputs` のリストから `enable_watermark` を削除
+- [x] [my/gradio_ref.py:41-56](../../gradio_ref.py#L41-L56) の import から `FIXED_SECONDS` を削除
+- [x] [my/gradio_ref.py:624](../../gradio_ref.py#L624) の `seconds=FIXED_SECONDS` を `seconds=None` に変更
+- [x] [my/gradio_ref.py:505-512](../../gradio_ref.py#L505-L512) の `_build_runtime_key(...)` 呼び出しから `enable_watermark=enable_watermark` を削除
+- [x] [my/gradio_ref.py:845](../../gradio_ref.py#L845) 付近の `enable_watermark = gr.State(False)` を削除
+- [x] `_load_model` の呼び出しから `enable_watermark` 引数を削除
+- [x] `_run_generation` シグネチャから `enable_watermark` 引数を削除
+- [x] `_make_inputs` のリストから `enable_watermark` を削除
 
 ### A-3. 動作確認
-- [ ] `python -m my.gradio_gen` で起動できる
-- [ ] `python -m my.gradio_ref` で起動できる
-- [ ] **v2 ckpt** で 1 件生成成功（Duration Predictor 未搭載 → 30秒フォールバック）
-- [ ] **v3 ckpt**（`Aratako/Irodori-TTS-500M-v3`）で参照版が 1 件生成成功
-- [ ] Generate Forever / Cancel Forever が動く
-- [ ] Live Update が動く（text 変更が次イテレーションに反映）
-- [ ] キュー再生が動く（Autoplay ON で生成すると順次再生）
-- [ ] 履歴 Audio×5 が表示・更新される
-- [ ] DB に新規行が INSERT される
+- [x] `python -m my.gradio_gen` で起動できる
+- [x] `python -m my.gradio_ref` で起動できる
+- [x] **v2 ckpt** で 1 件生成成功（Duration Predictor 未搭載 → 30秒フォールバック）
+- [x] **v3 ckpt**（`Aratako/Irodori-TTS-500M-v3`）で参照版が 1 件生成成功
+- [x] Generate Forever / Cancel Forever が動く
+- [x] Live Update が動く（text 変更が次イテレーションに反映）
+- [x] キュー再生が動く（Autoplay ON で生成すると順次再生）
+- [x] 履歴 Audio×5 が表示・更新される
+- [x] DB に新規行が INSERT される
 
 ### A-4. PR
-- [ ] PR タイトル: `fix: v3 本家シグネチャ変更に追従させて my/UI を起動可能にする`
-- [ ] PR 概要に「FIXED_SECONDS 撤去 / enable_watermark 引数撤去」を明記
-- [ ] `--base main` で作成
+- [x] PR タイトル: `fix: v3 本家シグネチャ変更に追従させて my/UI を起動可能にする`
+- [x] PR 概要に「FIXED_SECONDS 撤去 / enable_watermark 引数撤去」を明記
+- [x] `--base main` で作成
 
 ---
 
@@ -115,7 +115,7 @@
 - [x] **新パラメータは Live Update の対象外**であることを実際に確認（Generate Forever 中に変更しても次イテレーションに反映されない設計になっていることを確認）
 
 ### B-9. PR
-- [ ] タイトル: `feat: Duration Predictor / Sway Sampling / LoRA を my/UI に露出`
+- [x] タイトル: `feat: Duration Predictor / Sway Sampling / LoRA を my/UI に露出`
 
 ---
 
@@ -124,25 +124,25 @@
 ### ブランチ: `feature/myui-v3-emoji`
 
 ### C1-1. import 追加（両ファイル）
-- [ ] `from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette`
+- [x] `from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette`
 
 ### C1-2. UI 配置（両ファイル）
-- [ ] `text = gr.Textbox(...)` の直後（同じ `with gr.Column():` 配下）に：
+- [x] `text = gr.Textbox(...)` の直後（同じ `with gr.Column():` 配下）に：
   ```python
   build_emoji_palette(text, open=False)
   ```
 
 ### C1-3. CSS 注入
-- [ ] `demo.launch(...)` の引数に `css=EMOJI_PALETTE_CSS` を追加
+- [x] `demo.launch(...)` の引数に `css=EMOJI_PALETTE_CSS` を追加
   - 既存の `head=_QUEUE_PLAYBACK_JS` とは別レイヤーなので競合しない見込みだが、要動作確認
 
 ### C1-4. 動作確認
-- [ ] 絵文字をクリック → text に挿入される
-- [ ] Live Update ON 時、絵文字挿入も `text.change` 経由で次イテレーションに反映される
-- [ ] キュー再生 JS と CSS が共存して壊れない
+- [x] 絵文字をクリック → text に挿入される
+- [x] Live Update ON 時、絵文字挿入も `text.change` 経由で次イテレーションに反映される
+- [x] キュー再生 JS と CSS が共存して壊れない
 
 ### C1-5. PR
-- [ ] タイトル: `feat: 絵文字パレットを my/UI に導入`
+- [x] タイトル: `feat: 絵文字パレットを my/UI に導入`
 
 ---
 
@@ -151,35 +151,35 @@
 ### ブランチ: `feature/myui-v3-speaker-inversion`
 
 ### C2-1. import 追加
-- [ ] `from gradio_app import _resolve_speaker_embedding`
+- [x] `from gradio_app import _resolve_speaker_embedding`
 
 ### C2-2. UI 追加（Reference Audio 欄の隣 or 下）
-- [ ] `uploaded_speaker_embedding = gr.File(label="Speaker Embedding (.speaker.safetensors)", type="filepath", file_types=[".safetensors"], file_count="single")`
-- [ ] `speaker_embedding_path_raw = gr.Textbox(label="Speaker Embedding Path (optional, alt to upload)", value=last_settings.get("speaker_embedding_path_raw", ""))`
+- [x] `uploaded_speaker_embedding = gr.File(label="Speaker Embedding (.speaker.safetensors)", type="filepath", file_types=[".safetensors"], file_count="single")`
+- [x] `speaker_embedding_path_raw = gr.Textbox(label="Speaker Embedding Path (optional, alt to upload)", value=last_settings.get("speaker_embedding_path_raw", ""))`
 
 ### C2-3. `_run_generation` 変更
-- [ ] 引数に追加：`uploaded_speaker_embedding, speaker_embedding_path_raw`
-- [ ] 関数内で `speaker_embedding = _resolve_speaker_embedding(uploaded_embedding=uploaded_speaker_embedding, speaker_embedding_path_raw=speaker_embedding_path_raw)`
-- [ ] 排他チェック：
+- [x] 引数に追加：`uploaded_speaker_embedding, speaker_embedding_path_raw`
+- [x] 関数内で `speaker_embedding = _resolve_speaker_embedding(uploaded_embedding=uploaded_speaker_embedding, speaker_embedding_path_raw=speaker_embedding_path_raw)`
+- [x] 排他チェック：
   ```python
   if ref_wav is not None and speaker_embedding is not None:
       raise ValueError("参照音声と Speaker Embedding は同時に指定できません。")
   no_ref = ref_wav is None and speaker_embedding is None
   ```
-- [ ] `SamplingRequest(..., ref_embed=speaker_embedding, no_ref=no_ref, ...)`
+- [x] `SamplingRequest(..., ref_embed=speaker_embedding, no_ref=no_ref, ...)`
 
 ### C2-4. 設定永続化
-- [ ] `speaker_embedding_path_raw` を `save_last_settings` / `_load_settings_for_ui` に追加（ファイルアップロード値は保存しない）
+- [x] `speaker_embedding_path_raw` を `save_last_settings` / `_load_settings_for_ui` に追加（ファイルアップロード値は保存しない）
 
 ### C2-5. 動作確認
-- [ ] `.speaker.safetensors` をアップロード → 学習済み話者の声で生成成功
-- [ ] パステキストボックス指定でも同等動作
-- [ ] Reference Audio と同時アップロード → 明示的なエラーメッセージ
-- [ ] どちらも未指定 → `no_ref` モードで生成
-- [ ] 再起動時にパスが復元される（アップロードファイルは復元されない）
+- [x] `.speaker.safetensors` をアップロード → 学習済み話者の声で生成成功
+- [x] パステキストボックス指定でも同等動作
+- [x] Reference Audio と同時アップロード → 明示的なエラーメッセージ
+- [x] どちらも未指定 → `no_ref` モードで生成
+- [x] 再起動時にパスが復元される（アップロードファイルは復元されない）
 
 ### C2-6. PR
-- [ ] タイトル: `feat: Speaker Inversion(.speaker.safetensors) を my/gradio_ref に対応`
+- [x] タイトル: `feat: Speaker Inversion(.speaker.safetensors) を my/gradio_ref に対応`
 
 ---
 
@@ -188,7 +188,7 @@
 ### ブランチ: `feature/myui-v3-db-schema`
 
 ### D-1. `my/db.py` 拡張
-- [ ] ヘルパ関数追加：
+- [x] ヘルパ関数追加：
   ```python
   def _ensure_column(conn, table: str, col: str, ddl: str) -> None:
       cur = conn.execute(f"PRAGMA table_info({table})")
@@ -196,7 +196,7 @@
       if col not in cols:
           conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
   ```
-- [ ] `init_db()` 内で以下を冪等に追加：
+- [x] `init_db()` 内で以下を冪等に追加：
   - `duration_scale REAL`
   - `seconds REAL`
   - `t_schedule_mode TEXT`
@@ -206,14 +206,14 @@
   - `cfg_scale_speaker REAL`
   - `ui_version TEXT`
   - `model_version TEXT`
-- [ ] `insert_generation()` のシグネチャに対応する引数を追加（すべて `default=None`）
-- [ ] INSERT 文の `VALUES` 部分を更新
+- [x] `insert_generation()` のシグネチャに対応する引数を追加（すべて `default=None`）
+- [x] INSERT 文の `VALUES` 部分を更新
 
 ### D-2. `my/__init__.py` にバージョン定数追加
-- [ ] `MY_UI_VERSION: str = "v3-myui-1"` を定義
+- [x] `MY_UI_VERSION: str = "v3-myui-1"` を定義
 
 ### D-3. モデルバージョン推定ヘルパ
-- [ ] `my/db.py` に追加（または `my/__init__.py`）：
+- [x] `my/db.py` に追加（または `my/__init__.py`）：
   ```python
   def guess_model_version(checkpoint: str) -> str | None:
       s = str(checkpoint).lower()
@@ -227,27 +227,27 @@
   ```
 
 ### D-4. 生成UI からの呼び出し変更
-- [ ] `gradio_gen.py` の `insert_generation(...)` 呼び出しに新引数を渡す
+- [x] `gradio_gen.py` の `insert_generation(...)` 呼び出しに新引数を渡す
   - `duration_scale, seconds, t_schedule_mode, sway_coeff, lora_adapter, cfg_scale_speaker=None, speaker_embedding=None, ui_version=MY_UI_VERSION, model_version=guess_model_version(checkpoint)`
-- [ ] `gradio_ref.py` の `insert_generation(...)` 呼び出しに新引数を渡す
+- [x] `gradio_ref.py` の `insert_generation(...)` 呼び出しに新引数を渡す
   - `cfg_scale_caption=None` → 既存通り
   - `cfg_scale_speaker=float(cfg_scale_speaker)`
   - `speaker_embedding=...`
 
 ### D-5. `my/streamlit_history.py` への波及
-- [ ] カード詳細に新カラム表示を追加
+- [x] カード詳細に新カラム表示を追加
   - `duration_scale / seconds / t_schedule_mode / sway_coeff / lora_adapter / speaker_embedding / cfg_scale_speaker / ui_version / model_version`
-- [ ] `NULL` は「(不明)」または「-」表示
-- [ ] **既存レコード（旧 myUI で書き込まれた行）が表示崩れしないこと**を確認
+- [x] `NULL` は「(不明)」または「-」表示
+- [x] **既存レコード（旧 myUI で書き込まれた行）が表示崩れしないこと**を確認
 
 ### D-6. 動作確認
-- [ ] **旧 DB を持つ環境**で起動 → カラム自動追加・既存レコード保持
-- [ ] 新規生成 → 全新カラムに値が入る（無関係なカラムは `NULL`）
-- [ ] 閲覧UI → 古いレコード「(不明)」、新しいレコード全カラム表示
-- [ ] 複数回 `init_db()` を呼んでもエラーにならない（冪等性確認）
+- [x] **旧 DB を持つ環境**で起動 → カラム自動追加・既存レコード保持
+- [x] 新規生成 → 全新カラムに値が入る（無関係なカラムは `NULL`）
+- [x] 閲覧UI → 古いレコード「(不明)」、新しいレコード全カラム表示
+- [x] 複数回 `init_db()` を呼んでもエラーにならない（冪等性確認）
 
 ### D-7. PR
-- [ ] タイトル: `feat: 履歴DBにv3サンプリングパラメータと UI/モデルバージョン列を追加`
+- [x] タイトル: `feat: 履歴DBにv3サンプリングパラメータと UI/モデルバージョン列を追加`
 
 ---
 
@@ -256,22 +256,22 @@
 ### ブランチ: `docs/myui-v3-migration-notes`
 
 ### E-1. `my/README.md` 更新
-- [ ] v3 対応の節を追加
-- [ ] Sway Sampling のおすすめ設定例（`num_steps=6, sway_coeff=-1.0`）
-- [ ] Duration Predictor の説明（`seconds` 空欄推奨）
-- [ ] LoRA アダプタの使い方
-- [ ] Speaker Inversion の使い方（参照版）
+- [x] v3 対応の節を追加
+- [x] Sway Sampling のおすすめ設定例（`num_steps=6, sway_coeff=-1.0`）
+- [x] Duration Predictor の説明（`seconds` 空欄推奨）
+- [x] LoRA アダプタの使い方
+- [x] Speaker Inversion の使い方（参照版）
 
 ### E-2. `my/docs/v2_to_v3_changes.md` 末尾に追記
-- [ ] 「myUI 側の対応状況」セクション
-- [ ] Phase A〜D のチェックリスト形式リンク
+- [x] 「myUI 側の対応状況」セクション
+- [x] Phase A〜D のチェックリスト形式リンク
 
 ### E-3. `my/docs/myui-v2/spec.md` の完成度確認
-- [ ] 実装完了後に乖離がないか見直し
-- [ ] 必要なら修正
+- [x] 実装完了後に乖離がないか見直し
+- [x] 必要なら修正
 
 ### E-4. PR
-- [ ] タイトル: `docs: myUI の v3 対応状況をまとめる`
+- [x] タイトル: `docs: myUI の v3 対応状況をまとめる`
 
 ---
 
