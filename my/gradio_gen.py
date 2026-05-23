@@ -41,7 +41,6 @@ from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_pale
 #       build_ui() と _run_generation() は本ファイルで独自に再実装する。
 # --------------------------------------------------------------------------- #
 from gradio_app_voicedesign import (
-    FIXED_SECONDS,
     _build_runtime_key,
     _clear_runtime_cache,
     _default_checkpoint,
