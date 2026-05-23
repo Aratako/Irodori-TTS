@@ -1,0 +1,77 @@
+model:
+  latent_dim: 32
+  latent_patch_size: 1
+  text_vocab_size: 99574
+  text_tokenizer_repo: llm-jp/llm-jp-3-150m
+  model_dim: 1280
+  num_layers: 12
+  num_heads: 20
+  mlp_ratio: 2.875
+  text_mlp_ratio: 2.6
+  speaker_mlp_ratio: 2.6
+  text_dim: 512
+  text_layers: 10
+  text_heads: 8
+  speaker_dim: 768
+  speaker_layers: 8
+  speaker_heads: 12
+  speaker_patch_size: 1
+  timestep_embed_dim: 512
+  adaln_rank: 192
+  use_duration_predictor: true
+  duration_aux_dim: 14
+  duration_hidden_dim: 1024
+  duration_layers: 3
+  duration_dropout: 0.1
+  duration_attention_heads: 8
+  duration_architecture: token_sum_adarn_zero_no_aux
+  duration_token_init_frames: 9.0
+  duration_speaker_fusion: adarn_zero
+
+train:
+  batch_size: 80
+  gradient_accumulation_steps: 1
+  num_workers: 16
+  dataloader_persistent_workers: true
+  dataloader_prefetch_factor: 4
+  allow_tf32: true
+  compile_model: false
+  precision: bf16
+  optimizer: adamw
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  lr_scheduler: wsd
+  warmup_steps: 1000
+  stable_steps: 24000
+  min_lr_scale: 0.01
+  max_steps: 30000
+  max_text_len: 256
+  text_condition_dropout: 0.1
+  speaker_condition_dropout: 0.1
+  timestep_stratified: true
+  max_latent_steps: 750
+  fixed_target_latent_steps:
+  fixed_target_full_mask: false
+  rf_loss_mode: utterance_mean
+  duration_loss_weight: 0.1
+  duration_speaker_dropout: 0.1
+  duration_huber_delta: 0.1
+  log_every: 100
+  save_every: 1000
+  checkpoint_best_n: 5
+  wandb_enabled: false
+  wandb_project:
+  wandb_entity:
+  wandb_run_name:
+  wandb_mode: online
+  ddp_find_unused_parameters: false
+  valid_ratio: 0.0005
+  valid_every: 1000
+  lora_enabled: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+  lora_bias: none
+  lora_target_modules: diffusion_attn
+  lora_modules_to_save: auto
+  seed: 0

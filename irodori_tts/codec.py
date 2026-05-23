@@ -41,8 +41,6 @@ class DACVAECodec:
     latent_dim: int
     device: torch.device
     dtype: torch.dtype
-    enable_watermark: bool
-    watermark_alpha: float | None
     deterministic_encode: bool
     deterministic_decode: bool
     normalize_db: float | None
@@ -53,8 +51,6 @@ class DACVAECodec:
         repo_id: str = "Aratako/Semantic-DACVAE-Japanese-32dim",
         device: str = "cuda",
         dtype: torch.dtype | None = None,
-        enable_watermark: bool = False,
-        watermark_alpha: float | None = None,
         deterministic_encode: bool = True,
         deterministic_decode: bool = True,
         normalize_db: float | None = -16.0,
@@ -83,22 +79,12 @@ class DACVAECodec:
         if dtype is not None:
             model = model.to(dtype=dtype)
 
-        configured_watermark_alpha: float | None = None
-        configured_enable_watermark = False
         decoder = getattr(model, "decoder", None)
         if decoder is not None and hasattr(decoder, "alpha"):
-            default_alpha = float(decoder.alpha)
-            if watermark_alpha is not None:
-                target_alpha = float(watermark_alpha)
-            elif enable_watermark:
-                target_alpha = default_alpha
-            else:
-                target_alpha = 0.0
-            decoder.alpha = float(target_alpha)
-            configured_watermark_alpha = float(decoder.alpha)
-            configured_enable_watermark = configured_watermark_alpha > 0.0
-            if not configured_enable_watermark and hasattr(decoder, "wm_model"):
-                # Keep decode output mono while skipping heavy watermark encode/decode path.
+            decoder.alpha = 0.0
+            if hasattr(decoder, "wm_model"):
+                # Irodori checkpoints were trained without the DACVAE watermark branch.
+                # Keep decode output mono while skipping that encode/decode path.
                 def _watermark_passthrough(
                     x: torch.Tensor,
                     message: torch.Tensor | None = None,
@@ -123,8 +109,6 @@ class DACVAECodec:
             latent_dim=int(z.shape[1]),
             device=torch.device(device),
             dtype=model_dtype,
-            enable_watermark=configured_enable_watermark,
-            watermark_alpha=configured_watermark_alpha,
             deterministic_encode=bool(deterministic_encode),
             deterministic_decode=bool(deterministic_decode),
             normalize_db=None if normalize_db is None else float(normalize_db),

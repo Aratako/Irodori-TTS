@@ -232,3 +232,5 @@ my/data/*.db-shm
 
 # 環境固有ファイル
 .DS_Store
+
+data/
