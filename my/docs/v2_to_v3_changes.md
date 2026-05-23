@@ -199,3 +199,32 @@ Gradio UIにクリッカブルな絵文字パレットが追加されました�
 > - v2 チェックポイントには Duration Predictor が含まれないため、`--seconds` 省略時は従来通り 30 秒にフォールバックする
 > - VoiceDesign チェックポイントは現時点で v2 ベースのまま（v3 VoiceDesign は未リリース）
 > - v3 ベースチェックポイントのモデルファイルは `Irodori-TTS-500M-v3.safetensors` に変更
+
+---
+
+## myUI（独自UI）における v3 対応状況（myui-v2）
+
+本家 Irodori-TTS の v3 アップグレードに対し、当フォークの独自UIおよび履歴システム（`my/` 配下）は **myui-v2** として完全に追従しています。
+
+### 主な対応内容
+
+1. **破壊的変更への追従（Phase A）**
+   * 本家側の `FIXED_SECONDS` 定数や、ウォーターマーク（`enable_watermark`）引数の廃止に伴う起動・生成時のシグネチャ競合を完全に解消。v3 コードベース上での正常起動を保証。
+2. **新規サンプリングパラメータUI（Phase B）**
+   * **Gradio生成UI** にて、Duration Predictor を利用するための `Seconds (blank=auto)` テキストボックスおよび `Duration Scale` スライダーを追加。
+   * Sway Sampling 用の `Time Schedule` (`linear`/`sway`) および `Sway Coeff` スライダーを追加。
+   * 時間スケジュールが `linear` のときは `Sway Coeff` が自動で操作不可（`interactive=False`）となる連動制御を実装。
+   * 動的 LoRA スタイル適用のための `LoRA Adapter Directory (optional)` 設定欄を追加。
+   * これらの新規パラメータの保存およびリロード時の活性化状態の完全復元に対応。
+3. **絵文字パレットの導入（Phase C-1）**
+   * 入力テキストエリアの直下にクリッカブルな絵文字パレットを導入。
+   * 各種感情スタイルを示す絵文字をクリックするだけでプロンプトに挿入され、Live Update にも連動。
+4. **Speaker Inversion 対応（Phase C-2）**
+   * **参照音声版（`gradio_ref.py`）** にて、Speaker Inversion モデルで作成した話者埋め込みファイル (`.speaker.safetensors`) のアップロード欄およびパス指定テキストボックスを配置。
+   * UIレイアウトを左右2列の Column に整理し、左側に Reference Audio、右側に Speaker Embedding を配置して視覚的な排他制御のわかりやすさを向上。
+   * Reference Audio と Speaker Embedding を両方同時に指定した場合は `ValueError` による安全なバリデーションエラーを発生させる。
+5. **履歴DB拡張 & Streamlit対応（Phase D）**
+   * `my/db.py` の `init_db()` 内にカラム自動追加ヘルパー（`_ensure_column`）を導入し、既存の SQLite データベースを冪等に自動拡張。
+   * 新カラム（`duration_scale`, `seconds`, `t_schedule_mode`, `sway_coeff`, `lora_adapter`, `speaker_embedding`, `cfg_scale_speaker`, `ui_version`, `model_version`）を新規レコード生成時に自動記録。
+   * myUI 自身のバージョン (`MY_UI_VERSION = "v3-myui-1"`) と、モデルファイル名から推定した世代 (`v2` / `v3` / `v2-voicedesign`) の自動分類・保存を実装。
+   * **履歴閲覧UI (Streamlit)** の詳細カードに2段目のメタ情報表示欄を追加し、これら新規の推論パラメータを可視化（古いレコードの NULL 互換性も維持）。
