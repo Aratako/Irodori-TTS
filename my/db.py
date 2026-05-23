@@ -41,7 +41,16 @@ CREATE TABLE IF NOT EXISTS generations (
     filename          TEXT,             -- 生成された wav ファイルの名前（拡張子含む）
     favorite          INTEGER DEFAULT 0,-- お気に入りフラグ（0=なし, 1=あり）
     rating            INTEGER,          -- レーティング（1〜5, 未評価は NULL）
-    note              TEXT              -- ユーザーメモ（自由記述）
+    note              TEXT,             -- ユーザーメモ（自由記述）
+    duration_scale    REAL,             -- 音声長の伸縮倍率（v3パラメータ）
+    seconds           REAL,             -- 指定秒数（v3パラメータ, 空欄時自動）
+    t_schedule_mode   TEXT,             -- 時間スケジューリングモード（v3パラメータ, linear/sway）
+    sway_coeff        REAL,             -- sway係数（v3パラメータ）
+    lora_adapter      TEXT,             -- LoRAアダプタのディレクトリパス（v3パラメータ）
+    speaker_embedding TEXT,             -- Speaker Inversion の safetensors パス（v3パラメータ）
+    cfg_scale_speaker REAL,             -- Speaker 側の CFG Scale（v3パラメータ）
+    ui_version        TEXT,             -- 生成したUIのバージョン
+    model_version     TEXT              -- 推定されたモデルのバージョン
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -86,12 +95,41 @@ def _get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
+    """
+    指定したテーブルにカラムが存在しない場合、ALTER TABLE を用いてカラムを追加する。
+    これにより、すでにDBが存在している環境であっても、スキーマ変更時にエラーを発生させずに
+    安全に新パラメータ用の列を追加（マイグレーション）できる。
+    """
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    cols = {row[1] for row in cur.fetchall()}
+    if col not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+
+def guess_model_version(checkpoint: str) -> str | None:
+    """
+    使用したチェックポイント名（パスやハギングフェイスのリポジトリID）から、
+    モデルのバージョン（v2, v2-voicedesign, v3など）を推定して文字列で返す。
+    履歴画面でどのバージョンのモデルで生成されたか判別するために利用する。
+    """
+    s = str(checkpoint).lower()
+    if "v3" in s:
+        return "v3"
+    if "v2-voicedesign" in s or "voice_design" in s or "voicedesign" in s:
+        return "v2-voicedesign"
+    if "v2" in s:
+        return "v2"
+    return None
+
+
 def init_db(db_path: Path | str | None = None) -> Path:
     """
     DBファイルを初期化し、テーブルが存在しなければ作成する。
 
     初回起動時や、DBファイルが未作成の場合に呼ぶ。
-    すでにテーブルが存在する場合は何もしない（IF NOT EXISTS）。
+    すでにテーブルが存在する場合は、新規カラム（v3用およびバージョン情報用）が
+    存在するか確認し、なければ自動で追加（マイグレーション）する。
 
     Args:
         db_path: DBファイルのパス。None の場合はデフォルトパスを使用。
@@ -113,8 +151,21 @@ def init_db(db_path: Path | str | None = None) -> Path:
             if "duplicate column name" not in str(e).lower():
                 raise
 
+        # v3 新サンプリングパラメータおよびUI/モデルバージョン列を安全（冪等）に追加
+        # 既存データベースがある場合でも、この処理によりスキーマが自動拡張される
+        _ensure_column(conn, "generations", "duration_scale", "REAL")
+        _ensure_column(conn, "generations", "seconds", "REAL")
+        _ensure_column(conn, "generations", "t_schedule_mode", "TEXT")
+        _ensure_column(conn, "generations", "sway_coeff", "REAL")
+        _ensure_column(conn, "generations", "lora_adapter", "TEXT")
+        _ensure_column(conn, "generations", "speaker_embedding", "TEXT")
+        _ensure_column(conn, "generations", "cfg_scale_speaker", "REAL")
+        _ensure_column(conn, "generations", "ui_version", "TEXT")
+        _ensure_column(conn, "generations", "model_version", "TEXT")
+
         # 既存レコードの file_path からファイル名を抽出して filename カラムに反映する
-        rows = conn.execute("SELECT id, file_path FROM generations").fetchall()
+        # filenameが未格納（NULL）のレコードのみを対象にすることで無駄な更新を防ぐ
+        rows = conn.execute("SELECT id, file_path FROM generations WHERE filename IS NULL").fetchall()
         for row in rows:
             row_id = row["id"]
             file_path_str = row["file_path"]
@@ -144,6 +195,15 @@ def insert_generation(
     cfg_guidance_mode: str | None = None,
     checkpoint: str | None = None,
     created_at: str | None = None,
+    duration_scale: float | None = None,
+    seconds: float | None = None,
+    t_schedule_mode: str | None = None,
+    sway_coeff: float | None = None,
+    lora_adapter: str | None = None,
+    speaker_embedding: str | None = None,
+    cfg_scale_speaker: float | None = None,
+    ui_version: str | None = None,
+    model_version: str | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     """
@@ -164,6 +224,15 @@ def insert_generation(
         cfg_guidance_mode: CFG ガイダンスモード
         checkpoint:        チェックポイントのパスまたは HF repo ID
         created_at:        生成日時（ISO 8601形式）。省略時は現在時刻。
+        duration_scale:    音声長の伸縮倍率（v3パラメータ）
+        seconds:           指定秒数（v3パラメータ）
+        t_schedule_mode:   時間スケジューリングモード（v3パラメータ）
+        sway_coeff:        sway係数（v3パラメータ）
+        lora_adapter:      LoRAアダプタのディレクトリパス（v3パラメータ）
+        speaker_embedding: Speaker Inversion の safetensors パス（v3パラメータ）
+        cfg_scale_speaker: Speaker 側の CFG Scale（v3パラメータ）
+        ui_version:        生成したUIのバージョン
+        model_version:     推定されたモデルのバージョン
         db_path:           DBファイルのパス。None の場合はデフォルト。
 
     Returns:
@@ -180,8 +249,10 @@ def insert_generation(
             INSERT INTO generations
                 (created_at, text, caption, seed, num_steps,
                  cfg_scale_text, cfg_scale_caption, cfg_guidance_mode,
-                 checkpoint, file_path, filename)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 checkpoint, file_path, filename, duration_scale,
+                 seconds, t_schedule_mode, sway_coeff, lora_adapter,
+                 speaker_embedding, cfg_scale_speaker, ui_version, model_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 created_at,
@@ -195,6 +266,15 @@ def insert_generation(
                 checkpoint,
                 file_path,
                 filename,
+                duration_scale,
+                seconds,
+                t_schedule_mode,
+                sway_coeff,
+                lora_adapter,
+                speaker_embedding,
+                cfg_scale_speaker,
+                ui_version,
+                model_version,
             ),
         )
         conn.commit()
