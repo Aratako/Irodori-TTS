@@ -48,7 +48,6 @@ from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_pale
 #       build_ui() と _run_generation() は本ファイルで独自に再実装する。
 # --------------------------------------------------------------------------- #
 from gradio_app import (
-    FIXED_SECONDS,
     _build_runtime_key,
     _clear_runtime_cache,
     _default_checkpoint,
@@ -578,41 +577,29 @@ def _run_generation(
     # DB を初期化（テーブルが無ければ作る）
     init_db()
 
-    # セッションIDを取�        # --- DB に書き込み ---
-        # Why: 参照音声版では caption（スタイルプロンプト）を使わないが、
-        #      caption カラムに参照音声のファイル名を記録しておくことで、
-        #      DB 上でどの参照音声を使って生成したかを追跡できるようにする。
-        #      参照音声がない場合は "none" を記録する。
-        #      また、v3新サンプリングパラメータ、スピーカーCFG、およびUI/モデルバージョン列を
-        #      記録するため、locals() を用いて安全に引数を抽出して insert_generation に渡す。
-        ref_caption = Path(ref_wav).name if ref_wav else "none"
-        insert_generation(
-            text=text_value,
-            caption=ref_caption,  # 参照音声のファイル名、なければ "none"
-            seed=used_seed,
-            num_steps=int(num_steps),
-            cfg_scale_text=float(cfg_scale_text),
-            cfg_scale_caption=None,  # 参照音声版では cfg_scale_speaker を使うが DB スキーマに列がないため省略
-            cfg_scale_speaker=float(cfg_scale_speaker),
-            cfg_guidance_mode=str(cfg_guidance_mode),
-            checkpoint=str(checkpoint).strip(),
-            file_path=out_path_str,
-            filename=out_filename,
-            duration_scale=locals().get("duration_scale"),
-            seconds=locals().get("manual_seconds"),
-            t_schedule_mode=locals().get("t_schedule_mode"),
-            sway_coeff=locals().get("sway_coeff"),
-            lora_adapter=locals().get("lora_adapter"),
-            speaker_embedding=locals().get("speaker_embedding"),
-            ui_version=MY_UI_VERSION,
-            model_version=guess_model_version(checkpoint),
-        )
-        stdout_log("[my-ref] DB insert 完了")int),
+    # セッションIDを取得・フラグをリセット
+    session_id = request.session_hash if request else "default"
+    _session_stop_flags[session_id] = False
+
+    # autoplay の初期値をセッション変数にも反映
+    # Why: ジェネレータ起動前のチェックボックス状態を保持する
+    _session_autoplay_flags[session_id] = autoplay
+
+    # Live Update 用にテキストの初期値をセッション変数に保存
+    # Why: Live Update ON 時にループ内で最新値を参照するための初期値
+    _session_live_text[session_id] = text_value
+
+    # forever モード開始時にスピナーを表示
+    if forever:
+        stdout_log(f"[my-ref] Generate Forever started (session: {session_id})")
+
+    # --- 直近の生成設定を保存 ---
+    settings_to_save = {
+        "checkpoint": str(checkpoint),
         "model_device": str(model_device),
         "model_precision": str(model_precision),
         "codec_device": str(codec_device),
         "codec_precision": str(codec_precision),
-        "enable_watermark": bool(enable_watermark),
         "text": text_value,
         "speaker_embedding_path_raw": str(speaker_embedding_path_raw),
         "num_steps": int(num_steps) if str(num_steps).isdigit() else 40,
@@ -737,10 +724,19 @@ def _run_generation(
             num_steps=int(num_steps),
             cfg_scale_text=float(cfg_scale_text),
             cfg_scale_caption=None,  # 参照音声版では cfg_scale_speaker を使うが DB スキーマに列がないため省略
+            cfg_scale_speaker=float(cfg_scale_speaker),
             cfg_guidance_mode=str(cfg_guidance_mode),
             checkpoint=str(checkpoint).strip(),
             file_path=out_path_str,
             filename=out_filename,
+            duration_scale=locals().get("duration_scale"),
+            seconds=locals().get("manual_seconds"),
+            t_schedule_mode=locals().get("t_schedule_mode"),
+            sway_coeff=locals().get("sway_coeff"),
+            lora_adapter=locals().get("lora_adapter"),
+            speaker_embedding=locals().get("speaker_embedding"),
+            ui_version=MY_UI_VERSION,
+            model_version=guess_model_version(checkpoint),
         )
         stdout_log("[my-ref] DB insert 完了")
 
