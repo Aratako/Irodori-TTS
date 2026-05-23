@@ -39,7 +39,6 @@ import gradio as gr
 #       build_ui() と _run_generation() は本ファイルで独自に再実装する。
 # --------------------------------------------------------------------------- #
 from gradio_app import (
-    FIXED_SECONDS,
     _build_runtime_key,
     _clear_runtime_cache,
     _default_checkpoint,
@@ -447,7 +446,6 @@ def _run_generation(
     model_precision: str,
     codec_device: str,
     codec_precision: str,
-    enable_watermark: bool,
     text: str,
     uploaded_audio: str | None,
     num_steps: int,
@@ -508,7 +506,6 @@ def _run_generation(
         model_precision=model_precision,
         codec_device=codec_device,
         codec_precision=codec_precision,
-        enable_watermark=enable_watermark,
     )
 
     text_value = str(text).strip()
@@ -621,7 +618,7 @@ def _run_generation(
                 ref_ensure_max=True,
                 num_candidates=1,  # 常に1件だけ生成（候補グリッド廃止）
                 decode_mode="sequential",
-                seconds=FIXED_SECONDS,
+                seconds=None,
                 max_ref_seconds=30.0,
                 max_text_len=None,
                 num_steps=int(num_steps),
@@ -841,8 +838,7 @@ def build_ui() -> gr.Blocks:
                 value=last_settings.get("codec_precision", codec_precision_choices[0]),
                 scale=1,
             )
-            # ウォーターマークは常にOFF（gr.State で非表示管理）
-            enable_watermark = gr.State(False)
+
 
         # --- モデル読み込み/解放ボタン ---
         with gr.Row():
@@ -1124,7 +1120,6 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
                 text,
                 uploaded_audio,
                 num_steps,
@@ -1275,7 +1270,6 @@ def build_ui() -> gr.Blocks:
                 model_precision,
                 codec_device,
                 codec_precision,
-                enable_watermark,
             ],
             outputs=[clear_cache_msg],
         )
