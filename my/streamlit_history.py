@@ -414,6 +414,57 @@ for row in rows:
                     unsafe_allow_html=True,
                 )
 
+        # --- メタ情報2段目（新パラメータ等） ---
+        # 既存レコード（旧スキーマ）との互換性のため、すべて row.get() を使って安全に取得し、
+        # カラムが存在しない・値が設定されていない場合は適切な代替表記にフォールバックさせる。
+        meta2_cols = st.columns([1.5, 1.5, 2.5, 2.5, 1])
+        with meta2_cols[0]:
+            st.markdown('<div class="meta-label">⏱️ Duration Scale / Sec</div>', unsafe_allow_html=True)
+            dur = row.get("duration_scale")
+            sec = row.get("seconds")
+            dur_str = f"{dur:.2f}x" if dur is not None else "—"
+            sec_str = f"{sec:.1f}s" if sec is not None else "auto"
+            st.markdown(
+                f'<div class="meta-value">{dur_str} / {sec_str}</div>',
+                unsafe_allow_html=True,
+            )
+        with meta2_cols[1]:
+            st.markdown('<div class="meta-label">📈 Schedule / Sway</div>', unsafe_allow_html=True)
+            tsched = row.get("t_schedule_mode")
+            sway = row.get("sway_coeff")
+            tsched_str = str(tsched) if tsched is not None else "—"
+            sway_str = f"{sway:.1f}" if sway is not None else "—"
+            st.markdown(
+                f'<div class="meta-value">{tsched_str} (coeff: {sway_str})</div>',
+                unsafe_allow_html=True,
+            )
+        with meta2_cols[2]:
+            st.markdown('<div class="meta-label">🎧 Speaker (CFG / Embed)</div>', unsafe_allow_html=True)
+            spk_cfg = row.get("cfg_scale_speaker")
+            spk_embed = row.get("speaker_embedding")
+            spk_cfg_str = f"{spk_cfg:.1f}" if spk_cfg is not None else "—"
+            spk_embed_str = Path(spk_embed).name if spk_embed else "—"
+            st.markdown(
+                f'<div class="meta-value">CFG: {spk_cfg_str} / {spk_embed_str}</div>',
+                unsafe_allow_html=True,
+            )
+        with meta2_cols[3]:
+            st.markdown('<div class="meta-label">🎨 LoRA Adapter</div>', unsafe_allow_html=True)
+            lora = row.get("lora_adapter")
+            lora_str = Path(lora).name if lora else "—"
+            st.markdown(
+                f'<div class="meta-value">{lora_str}</div>',
+                unsafe_allow_html=True,
+            )
+        with meta2_cols[4]:
+            st.markdown('<div class="meta-label">🏷️ UI / Model Ver</div>', unsafe_allow_html=True)
+            ui_ver = row.get("ui_version") or "—"
+            model_ver = row.get("model_version") or "—"
+            st.markdown(
+                f'<div class="meta-value">{ui_ver} / {model_ver}</div>',
+                unsafe_allow_html=True,
+            )
+
         # --- 区切り線 ---
         st.markdown('<div class="card-divider"></div>', unsafe_allow_html=True)
 

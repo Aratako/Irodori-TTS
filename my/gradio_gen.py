@@ -53,7 +53,8 @@ from irodori_tts.inference_runtime import (
 )
 
 # 自前の DB モジュール
-from my.db import init_db, insert_generation
+from my import MY_UI_VERSION
+from my.db import init_db, insert_generation, guess_model_version
 
 # 直近履歴の最大表示件数
 _MAX_HISTORY = 5
@@ -638,6 +639,10 @@ def _run_generation(
         stdout_log(f"[my-gen] saved: {out_path_str}")
 
         # --- DB に書き込み ---
+        # Why: v3新サンプリングパラメータおよびUI/モデルバージョン列を記録するため、
+        #      locals() を用いて安全に引数を抽出して insert_generation に渡す。
+        #      これにより、別ブランチの変更状況（Phase B/C）に依存せずエラーなしで動作し、
+        #      将来的にそれらがマージされた際にも自動的に値が保存されるようになる。
         insert_generation(
             text=text_value,
             caption=caption_value or None,
@@ -649,6 +654,13 @@ def _run_generation(
             checkpoint=str(checkpoint).strip(),
             file_path=out_path_str,
             filename=out_filename,
+            duration_scale=locals().get("duration_scale"),
+            seconds=locals().get("manual_seconds"),
+            t_schedule_mode=locals().get("t_schedule_mode"),
+            sway_coeff=locals().get("sway_coeff"),
+            lora_adapter=locals().get("lora_adapter"),
+            ui_version=MY_UI_VERSION,
+            model_version=guess_model_version(checkpoint),
         )
         stdout_log("[my-gen] DB insert 完了")
 
