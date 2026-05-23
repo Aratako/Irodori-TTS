@@ -52,6 +52,7 @@ from gradio_app import (
     _parse_optional_int,
     _precision_choices_for_device,
     _resolve_ref_wav,
+    _resolve_speaker_embedding,
 )
 from irodori_tts.inference_runtime import (
     SamplingRequest,
@@ -448,6 +449,8 @@ def _run_generation(
     codec_precision: str,
     text: str,
     uploaded_audio: str | None,
+    uploaded_speaker_embedding: object,
+    speaker_embedding_path_raw: str,
     num_steps: int,
     seed_raw: str,
     cfg_guidance_mode: str,
@@ -526,7 +529,22 @@ def _run_generation(
     # Why: uploaded_audio が None や空文字の場合は no-reference モードで推論する。
     #      参照音声がある場合はそのパスを使い、話者の声質を真似て生成する。
     ref_wav = _resolve_ref_wav(uploaded_audio=uploaded_audio)
-    no_ref = ref_wav is None
+
+    # Speaker Embedding の解決
+    # Why: 本家で定義されている _resolve_speaker_embedding を用いて、
+    #      アップロードされたファイルまたは直接入力されたパスから embedding ファイルを解決する。
+    speaker_embedding = _resolve_speaker_embedding(
+        uploaded_embedding=uploaded_speaker_embedding,
+        speaker_embedding_path_raw=speaker_embedding_path_raw,
+    )
+
+    # 排他チェック
+    # Why: 参照音声(ref_wav)と Speaker Embedding(safetensors) は排他仕様であり、
+    #      同時に指定された場合はエラーにする。どちらも未指定の場合は no_ref モードとなる。
+    if ref_wav is not None and speaker_embedding is not None:
+        raise ValueError("参照音声と Speaker Embedding は同時に指定できません。")
+
+    no_ref = ref_wav is None and speaker_embedding is None
 
     # 出力ディレクトリを確保
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -558,6 +576,7 @@ def _run_generation(
         "codec_device": str(codec_device),
         "codec_precision": str(codec_precision),
         "text": text_value,
+        "speaker_embedding_path_raw": str(speaker_embedding_path_raw),
         "num_steps": int(num_steps) if str(num_steps).isdigit() else 40,
         "seed_raw": str(seed_raw),
         "cfg_guidance_mode": str(cfg_guidance_mode),
@@ -613,6 +632,7 @@ def _run_generation(
                 text=text_value,
                 ref_wav=ref_wav,
                 ref_latent=None,
+                ref_embed=speaker_embedding,
                 no_ref=bool(no_ref),
                 ref_normalize_db=-16.0,
                 ref_ensure_max=True,
@@ -849,36 +869,46 @@ def build_ui() -> gr.Blocks:
         # --- テキスト入力 ---
         text = gr.Textbox(label="Text", lines=4, value=last_settings.get("text", ""))
 
-        # --- 参照音声アップロード ---
-        # Why: VoiceDesign版では caption（テキスト）で声質を指定するが、
-        #      こちらは実際の音声ファイルをアップロードして声質を指定する。
-        #      ファイル名表示と上書きの利便性のため、Audioコンポーネントではなく
-        #      Fileコンポーネントを使ってファイル名表示と上書きD&Dを両立させる。
-        #      ファイルがすでに読み込まれているとD&Dできない問題を回避するため、
-        #      ドロップゾーンを常に空に保ち、選択されたファイルは別途表示する。
-        with gr.Column():
-            with gr.Row():
-                uploaded_audio_file = gr.File(
-                    label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
+        # --- 参照音声 / Speaker Embedding 入力欄 ---
+        # Why: 参照音声アップロードと Speaker Embedding は排他仕様（どちらか一方のみ指定）である。
+        #      左右の Column に並べて表示することで、ユーザーがそれぞれの状態を視覚的に
+        #      比較・確認しやすくする。
+        with gr.Row():
+            with gr.Column():
+                with gr.Row():
+                    uploaded_audio_file = gr.File(
+                        label="Reference Audio Upload (ここに音声ファイルをドラッグ&ドロップ)",
+                        type="filepath",
+                        file_types=["audio"],
+                        file_count="single",
+                    )
+                
+                with gr.Row():
+                    ref_filename_display = gr.Textbox(
+                        label="現在のリファレンス音声",
+                        value="(no-reference mode)",
+                        interactive=False,
+                        scale=3
+                    )
+                    clear_ref_btn = gr.Button("クリア (No Reference)", variant="stop", scale=1)
+                
+                uploaded_audio_player = gr.Audio(
+                    label="Reference Audio Playback",
                     type="filepath",
-                    file_types=["audio"],
+                    interactive=False,
+                )
+
+            with gr.Column():
+                uploaded_speaker_embedding = gr.File(
+                    label="Speaker Embedding (.speaker.safetensors) Upload",
+                    type="filepath",
+                    file_types=[".safetensors"],
                     file_count="single",
                 )
-            
-            with gr.Row():
-                ref_filename_display = gr.Textbox(
-                    label="現在のリファレンス音声",
-                    value="(no-reference mode)",
-                    interactive=False,
-                    scale=3
+                speaker_embedding_path_raw = gr.Textbox(
+                    label="Speaker Embedding Path (optional, alt to upload)",
+                    value=last_settings.get("speaker_embedding_path_raw", ""),
                 )
-                clear_ref_btn = gr.Button("クリア (No Reference)", variant="stop", scale=1)
-            
-            uploaded_audio_player = gr.Audio(
-                label="Reference Audio Playback",
-                type="filepath",
-                interactive=False,
-            )
             
         # 内部パス保持用の State コンポーネント。この State が _make_inputs で参照される。
         uploaded_audio = gr.State(None)
@@ -1122,6 +1152,8 @@ def build_ui() -> gr.Blocks:
                 codec_precision,
                 text,
                 uploaded_audio,
+                uploaded_speaker_embedding,
+                speaker_embedding_path_raw,
                 num_steps,
                 seed_raw,
                 cfg_guidance_mode,
@@ -1298,6 +1330,7 @@ def build_ui() -> gr.Blocks:
                 c_device,
                 s.get("codec_precision", codec_precision_choices[0]),
                 s.get("text", ""),
+                s.get("speaker_embedding_path_raw", ""),
                 s.get("num_steps", 40),
                 s.get("seed_raw", ""),
                 s.get("cfg_guidance_mode", "independent"),
@@ -1327,6 +1360,7 @@ def build_ui() -> gr.Blocks:
                 codec_device,
                 codec_precision,
                 text,
+                speaker_embedding_path_raw,
                 num_steps,
                 seed_raw,
                 cfg_guidance_mode,
