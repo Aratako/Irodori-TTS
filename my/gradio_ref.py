@@ -32,6 +32,15 @@ from pathlib import Path
 import gradio as gr
 
 # --------------------------------------------------------------------------- #
+#  絵文字パレットコンポーネントのインポート
+#
+#  Why: 音声生成時のテキストに感情やニュアンスを表す絵文字（耳元の音、ため息など）を
+#       簡単に挿入できるようにするため、本家の絵文字パレットUIを再利用する。
+# --------------------------------------------------------------------------- #
+from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
+
+
+# --------------------------------------------------------------------------- #
 #  本家 gradio_app.py からユーティリティ関数をインポート
 #
 #  Why: 同じロジックの重複実装を避けるため、パラメータ解析・ランタイム管理
@@ -849,6 +858,11 @@ def build_ui() -> gr.Blocks:
         # --- テキスト入力 ---
         text = gr.Textbox(label="Text", lines=4, value=last_settings.get("text", ""))
 
+        # Why: ユーザーが特定の感情表現や音響効果（囁き、笑いなど）を表す絵文字を
+        #      クリックだけでテキストのカーソル位置に挿入できるようにするため、
+        #      テキスト入力エリアの直下に絵文字パレットを配置する。初期状態は閉じた状態(open=False)とする。
+        build_emoji_palette(text, open=False)
+
         # --- 参照音声アップロード ---
         # Why: VoiceDesign版では caption（テキスト）で声質を指定するが、
         #      こちらは実際の音声ファイルをアップロードして声質を指定する。
@@ -1363,6 +1377,8 @@ def main() -> None:
     demo = build_ui()
     # concurrency_limit=1: GPU を使うため、同時に1件しか処理しない
     demo.queue(default_concurrency_limit=1)
+    # Why: 絵文字パレットのボタン配置やスクロールエリアのスタイルを適切に適用するため、
+    #      起動時の CSS 引数に EMOJI_PALETTE_CSS を注入する。
     demo.launch(
         server_name=args.server_name,
         server_port=args.server_port,
@@ -1370,6 +1386,7 @@ def main() -> None:
         debug=bool(args.debug),
         inbrowser=True,
         allowed_paths=[str(_OUTPUT_DIR)],
+        css=EMOJI_PALETTE_CSS,
     )
 
 
