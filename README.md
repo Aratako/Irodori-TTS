@@ -238,6 +238,36 @@ For tuning guidance and detailed explanations of inference options, see the
 
 Generated audio is passed through [SilentCipher](https://github.com/sony/silentcipher) watermarking automatically when the dependency and model files are available.
 
+### English Word Readings
+
+Text normalization can optionally convert registered English words to Japanese
+katakana readings. Irodori-TTS ships with default readings at
+`irodori_tts/english_word_readings.jsonl`, and you can add or override local
+readings by creating `english_word_readings.jsonl` in the current working
+directory:
+
+```jsonl
+{"word":"gmail","reading":"ジーメール"}
+{"word":"gemini","reading":"ジェミニ"}
+```
+
+Readings are loaded in this order, with later files overriding earlier entries
+for the same `word`:
+
+1. Package default: `irodori_tts/english_word_readings.jsonl`
+2. Local override: `./english_word_readings.jsonl`
+3. Explicit override: `IRODORI_TTS_ENGLISH_WORD_READINGS_PATH`
+
+For example, when Irodori-TTS is used from `Irodori-TTS-Server`, place the local
+override at `Irodori-TTS-Server/english_word_readings.jsonl`. When running this
+repository directly, place it at the repository root.
+
+The local file is intentionally ignored by Git. It is read each time text is
+normalized, so updates are applied on the next inference or preprocessing call
+without restarting the process. Missing files are treated as an empty dictionary;
+invalid lines are skipped with a warning. To use an explicit path regardless of
+the working directory, set `IRODORI_TTS_ENGLISH_WORD_READINGS_PATH`.
+
 ## Training
 
 ### 1. Prepare Manifest (Precompute DACVAE Latents)
@@ -470,6 +500,8 @@ Irodori-TTS/
 ├── docs/
 │   └── parameters.md         # Detailed parameter guide
 │
+├── english_word_readings.jsonl # Local English reading overrides (Git-ignored)
+│
 ├── irodori_tts/                # Core library
 │   ├── model.py                # TextToLatentRFDiT architecture
 │   ├── rf.py                   # Rectified Flow utilities & Euler CFG sampling
@@ -481,6 +513,7 @@ Irodori-TTS/
 │   ├── lora.py                 # PEFT LoRA integration helpers
 │   ├── speaker_inversion.py    # Speaker Inversion embedding save/load helpers
 │   ├── text_normalization.py   # Japanese text normalization
+│   ├── english_word_readings.jsonl # Package default English readings
 │   ├── optim.py                # Muon + AdamW optimizer
 │   └── progress.py             # Training progress tracker
 │

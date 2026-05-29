@@ -122,3 +122,6 @@ line-ending = "auto"
 
 [tool.setuptools]
 packages = ["irodori_tts"]
+
+[tool.setuptools.package-data]
+irodori_tts = ["english_word_readings.jsonl"]
