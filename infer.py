@@ -7,16 +7,6 @@ from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
-from irodori_tts.inference_runtime import (
-    InferenceRuntime,
-    RuntimeKey,
-    SamplingRequest,
-    default_runtime_device,
-    resolve_cfg_scales,
-    save_wav,
-)
-
-
 def _parse_optional_float(value: str) -> float | None:
     raw = str(value).strip().lower()
     if raw in {"none", "null", "off", "disable", "disabled"}:
@@ -95,8 +85,8 @@ def main() -> None:
     parser.add_argument("--output-wav", default="output.wav")
     parser.add_argument(
         "--model-device",
-        default=default_runtime_device(),
-        help="Model inference device (e.g. cuda, mps, cpu).",
+        default=None,
+        help="Model inference device (e.g. cuda, mps, cpu). Defaults to auto-detected.",
     )
     parser.add_argument(
         "--model-precision",
@@ -106,8 +96,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--codec-device",
-        default=default_runtime_device(),
-        help="Codec device for reference encode/decode (e.g. cuda, mps, cpu).",
+        default=None,
+        help="Codec device for reference encode/decode (e.g. cuda, mps, cpu). Defaults to auto-detected.",
     )
     parser.add_argument(
         "--codec-precision",
@@ -370,6 +360,20 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    from irodori_tts.inference_runtime import (
+        InferenceRuntime,
+        RuntimeKey,
+        SamplingRequest,
+        default_runtime_device,
+        resolve_cfg_scales,
+        save_wav,
+    )
+
+    if args.model_device is None:
+        args.model_device = default_runtime_device()
+    if args.codec_device is None:
+        args.codec_device = default_runtime_device()
 
     checkpoint_path = _resolve_checkpoint_path(args)
 
