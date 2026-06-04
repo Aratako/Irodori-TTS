@@ -5,7 +5,6 @@ import argparse
 import math
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
 
 def _parse_optional_float(value: str) -> float | None:
     raw = str(value).strip().lower()
@@ -40,6 +39,8 @@ def _resolve_checkpoint_path(args: argparse.Namespace) -> str:
     repo_id = str(args.hf_checkpoint).strip()
     if repo_id == "":
         raise ValueError("hf_checkpoint must be non-empty.")
+
+    from huggingface_hub import hf_hub_download
 
     checkpoint_path = hf_hub_download(
         repo_id=repo_id,
