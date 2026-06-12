@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Irodori-TTS training and inference codebase"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "dacvae",
     "datasets>=3.0.0",
@@ -16,10 +16,10 @@ dependencies = [
     "pyyaml>=6.0",
     "safetensors>=0.7.0",
     "soundfile>=0.12.0",
-    "sentencepiece>=0.1.99,<0.2",
+    "sentencepiece>=0.1.99",
     "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
-    "torch>=2.10.0",
-    "torchaudio>=2.10.0",
+    "torch>=2.9.0",
+    "torchaudio>=2.9.0",
     "torchcodec>=0.10.0,<0.11.0",
     "transformers<5",
     "tqdm>=4.67.3",
@@ -44,6 +44,15 @@ rocm = [
     "pytorch-triton-rocm>=3.5.1; sys_platform == 'linux'",
     "triton-rocm>=3.6.0; sys_platform == 'linux'",
 ]
+rocm-win = [
+    "torch>=2.9.1 ; python_version == '3.12'",
+    "torchaudio>=2.9.1 ; python_version == '3.12'",
+    "torchcodec>=0.10.0,<0.11.0",
+    "rocm-sdk-core @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_core-7.2.0.dev0-py3-none-win_amd64.whl ; sys_platform == 'win32'",
+    "rocm-sdk-devel @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_devel-7.2.0.dev0-py3-none-win_amd64.whl ; sys_platform == 'win32'",
+    "rocm-sdk-libraries-custom @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_libraries_custom-7.2.0.dev0-py3-none-win_amd64.whl ; sys_platform == 'win32'",
+    "rocm @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm-7.2.0.dev0.tar.gz ; sys_platform == 'win32'",
+]
 xpu = [
     "torch>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
     "torchaudio>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
@@ -60,6 +69,7 @@ conflicts = [
         { extra = "cpu" },
         { extra = "cu128" },
         { extra = "rocm" },
+        { extra = "rocm-win" },
         { extra = "xpu" },
     ],
 ]
@@ -70,12 +80,14 @@ torch = [
     { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
     { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { url = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2/torch-2.9.1%2Brocmsdk20260116-cp312-cp312-win_amd64.whl", extra = "rocm-win", marker = "sys_platform == 'win32' and python_version == '3.12'" },
 ]
 torchaudio = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
     { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { url = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2/torchaudio-2.9.1%2Brocmsdk20260116-cp312-cp312-win_amd64.whl", extra = "rocm-win", marker = "sys_platform == 'win32' and python_version == '3.12'" },
 ]
 pytorch-triton-rocm = [
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
@@ -110,7 +122,7 @@ explicit = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [

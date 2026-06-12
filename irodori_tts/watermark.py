@@ -67,12 +67,18 @@ class SilentCipherWatermarker:
         if vector is None:
             return audio
 
-        encoded, _ = self.model.encode_wav(
-            vector.to(self.model.device),
-            int(sample_rate),
-            list(payload),
-            calc_sdr=False,
-        )
+        try:
+            encoded, _ = self.model.encode_wav(
+                vector.to(self.model.device),
+                int(sample_rate),
+                list(payload),
+                calc_sdr=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Watermarking failed (%s); returning audio without watermark.", exc
+            )
+            return audio
         encoded_audio = torch.as_tensor(encoded, dtype=torch.float32, device="cpu")
         return _match_original_rank(encoded_audio, reference=audio)
 

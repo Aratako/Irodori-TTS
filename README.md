@@ -70,6 +70,9 @@ uv sync --extra cu128
 # AMD ROCm on Linux/WSL
 uv sync --extra rocm
 
+# AMD ROCm on Windows native (Python 3.12 required)
+uv sync --extra rocm-win --python 3.12
+
 # Intel XPU on Linux/Windows
 uv sync --extra xpu
 
@@ -79,9 +82,10 @@ uv sync --extra cpu
 
 The PyTorch backend extras are mutually exclusive. The `cu128` extra uses the
 PyTorch CUDA 12.8 index, the `rocm` extra uses the PyTorch ROCm index on
-Linux, and the `xpu` extra uses the PyTorch XPU index on Linux/Windows.
-The `cpu` extra uses the CPU PyTorch index on Linux/Windows and falls
-back to the standard PyPI PyTorch wheels on macOS.
+Linux, the `rocm-win` extra uses AMD's Windows ROCm 7.2 packages directly from
+`repo.radeon.com`, and the `xpu` extra uses the PyTorch XPU index on
+Linux/Windows. The `cpu` extra uses the CPU PyTorch index on Linux/Windows and
+falls back to the standard PyPI PyTorch wheels on macOS.
 
 After syncing with a backend extra, use `uv run --no-sync ...` for the commands
 below to avoid re-syncing the environment without the selected PyTorch backend
@@ -90,6 +94,13 @@ extra.
 The `rocm` extra includes `pytorch-triton-rocm` because `triton-rocm` alone does
 not provide `triton.language` for the `transformers` to `torch._dynamo` import
 path. This was validated with AMD GPU inference.
+
+> **Note (rocm-win):** The Windows ROCm 7.2 wheels ship PyTorch 2.9.1 (Python
+> 3.12 only). A graphics driver version 26.1.1 or later is required. See the
+> [AMD ROCm Windows installation guide](https://rocm.docs.amd.com/projects/radeon-ryzen/en/docs-7.2/docs/install/installrad/windows/install-pytorch.html)
+> for driver prerequisites. `torchcodec` is resolved from PyPI for this backend;
+> if a version compatible with torch 2.9.x is unavailable, audio decoding may
+> fall back to `torchaudio`.
 
 ## Quick Start
 
