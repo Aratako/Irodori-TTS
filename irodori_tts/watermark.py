@@ -27,6 +27,7 @@ def _match_original_rank(audio: torch.Tensor, *, reference: torch.Tensor) -> tor
 
 class SilentCipherWatermarker:
     def __init__(self, *, device: str, model_type: str = "44.1k") -> None:
+        self._model_type = model_type
         self.model = self._load_backend(device=device, model_type=model_type)
 
     @staticmethod
@@ -75,10 +76,16 @@ class SilentCipherWatermarker:
                 calc_sdr=False,
             )
         except Exception as exc:
+            if str(getattr(self.model, "device", "cpu")) == "cpu":
+                logger.warning(
+                    "Watermarking failed (%s); returning audio without watermark.", exc
+                )
+                return audio
             logger.warning(
-                "Watermarking failed (%s); returning audio without watermark.", exc
+                "Watermarking on %s failed (%s); retrying on CPU.", self.model.device, exc
             )
-            return audio
+            self.model = self._load_backend(device="cpu", model_type=self._model_type)
+            return self.encode_one(audio, sample_rate=sample_rate, payload=payload)
         encoded_audio = torch.as_tensor(encoded, dtype=torch.float32, device="cpu")
         return _match_original_rank(encoded_audio, reference=audio)
 
