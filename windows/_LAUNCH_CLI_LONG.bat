@@ -30,7 +30,7 @@ set "UV_LINK_MODE=copy"
 set "CLI_TEXT_FILE=%~1"
 if not defined CLI_TEXT_FILE (
     echo [error] 入力テキストファイルが指定されていません。
-    echo [hint] このbatへUTF-8のテキストファイルをドラッグ&ドロップするか、
+    echo [hint] このbatへUTF-8のテキストファイルをドラッグ^&ドロップするか、
     echo [hint] コマンドラインから第1引数として指定してください。
     echo.
     echo 例: windows\_LAUNCH_CLI_LONG.bat samples\narration.txt

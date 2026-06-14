@@ -14,7 +14,7 @@ def split_long_text(text: str, max_chars: int = 80) -> list[str]:
         raise ValueError("max_chars must be >= 20")
 
     text = text.replace("\r\n", "\n").strip()
-    parts = re.split(r"(?<=[縲ゑｼ・ｼ・?])\s*|\n+", text)
+    parts = re.split(r"(?<=[。．！？!?])\s*|\n+", text)
 
     chunks: list[str] = []
     buf = ""

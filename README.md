@@ -1,5 +1,7 @@
 # Irodori-TTS
 
+[English](README.md) | [日本語](README_JP.md)
+
 [![Model](https://img.shields.io/badge/Model-HuggingFace-yellow)](https://huggingface.co/Aratako/Irodori-TTS-500M-v3)
 [![VoiceDesign](https://img.shields.io/badge/VoiceDesign-HuggingFace-orange)](https://huggingface.co/Aratako/Irodori-TTS-600M-v3-VoiceDesign)
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Space-blue)](https://huggingface.co/spaces/Aratako/Irodori-TTS-500M-v3-Demo)
@@ -32,6 +34,7 @@ For model weights and audio samples, please refer to the [base model card](https
 - **PEFT LoRA Fine-Tuning**: Parameter-efficient adaptation with PEFT/LoRA for released checkpoints
 - **Speaker Inversion**: Learn reusable speaker embedding tokens for a target voice while freezing the base model
 - **Flexible Inference**: CLI, Gradio Web UI, and HuggingFace Hub checkpoint support
+- **Long-form Generation**: Split longer narration into chunks, synthesize them sequentially, and export the result as WAV or MP3 with optional metadata
 
 ## Architecture
 
@@ -137,6 +140,44 @@ uv run --no-sync python infer.py \
   --output-wav outputs/sample_voice_design_clone.wav
 ```
 
+### Long-form VoiceDesign Generation
+
+For longer narration, use `--long` with a UTF-8 text file. The text is split into smaller chunks, synthesized sequentially, and then concatenated with optional pauses.
+
+```bash
+uv run --no-sync python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-600M-v3-VoiceDesign \
+  --text-file samples/narration.txt \
+  --caption "落ち着いたナレーション調で、自然なテンポで読み上げてください。" \
+  --no-ref \
+  --long \
+  --chunk-max-chars 80 \
+  --pause-ms 250 \
+  --output-format mp3 \
+  --output-dir outputs/long
+```
+
+Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub`, `mutagen`, and FFmpeg.
+
+### Long-form VoiceDesign Generation
+
+For longer narration, use `--long` with a UTF-8 text file. The text is split into smaller chunks, synthesized sequentially, and then concatenated with optional pauses.
+
+```bash
+uv run --no-sync python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-600M-v3-VoiceDesign \
+  --text-file samples/narration.txt \
+  --caption "落ち着いたナレーション調で、自然なテンポで読み上げてください。" \
+  --no-ref \
+  --long \
+  --chunk-max-chars 80 \
+  --pause-ms 250 \
+  --output-format mp3 \
+  --output-dir outputs/long
+```
+
+Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub`, `mutagen`, and FFmpeg.
+
 ### Speaker Inversion Inference
 
 Use a learned Speaker Inversion embedding instead of reference audio:
@@ -168,6 +209,25 @@ uv run --no-sync python gradio_app_voicedesign.py --server-name 0.0.0.0 --server
 The hosted VoiceDesign demo is available at [Aratako/Irodori-TTS-600M-v3-VoiceDesign-Demo](https://huggingface.co/spaces/Aratako/Irodori-TTS-600M-v3-VoiceDesign-Demo).
 
 `gradio_app.py` is for `Aratako/Irodori-TTS-500M-v3`. `gradio_app_voicedesign.py` is for `Aratako/Irodori-TTS-600M-v3-VoiceDesign` and remains compatible with v2 VoiceDesign checkpoints.
+
+### Windows helper scripts
+
+Windows users can optionally use the helper batch files under `windows/` for VoiceDesign long-form generation. The batch files are designed to be run from inside the `windows/` directory while automatically using the repository root as the working directory.
+
+```text
+windows/_IRODORI_LOCAL_CONFIG.example.bat
+windows/_LAUNCH_WebUI_LONG.bat
+windows/_LAUNCH_CLI_LONG.bat
+```
+
+Recommended setup:
+
+1. Copy `windows/_IRODORI_LOCAL_CONFIG.example.bat` to `windows/_IRODORI_LOCAL_CONFIG.bat`.
+2. Edit the local config if you need custom model paths, ports, output folders, or offline mode.
+3. Double-click `windows/_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI.
+4. Drag and drop a UTF-8 text file onto `windows/_LAUNCH_CLI_LONG.bat` for CLI long-form generation.
+
+The helper scripts create `_vendor`, `_models`, and output folders at the repository root, not inside `windows/`.
 
 ## Inference
 
@@ -534,6 +594,7 @@ Irodori-TTS/
 ├── infer.py                    # CLI inference
 ├── gradio_app.py               # Gradio web UI
 ├── gradio_app_voicedesign.py   # Gradio web UI for VoiceDesign checkpoints
+├── README_JP.md                 # Japanese end-user guide
 ├── prepare_manifest.py         # Dataset -> DACVAE latent preprocessing
 ├── convert_checkpoint_to_safetensors.py  # Checkpoint converter
 │
@@ -548,11 +609,17 @@ Irodori-TTS/
 │   ├── tokenizer.py            # Pretrained LLM tokenizer wrapper
 │   ├── config.py               # Model / Train / Sampling config dataclasses
 │   ├── inference_runtime.py    # Cached, thread-safe inference runtime
+│   ├── long_generation.py      # Long-form generation export utilities
 │   ├── lora.py                 # PEFT LoRA integration helpers
 │   ├── speaker_inversion.py    # Speaker Inversion embedding save/load helpers
 │   ├── text_normalization.py   # Japanese text normalization
 │   ├── optim.py                # Muon + AdamW optimizer
 │   └── progress.py             # Training progress tracker
+│
+├── windows/                    # Optional Windows helper scripts
+│   ├── _IRODORI_LOCAL_CONFIG.example.bat
+│   ├── _LAUNCH_WebUI_LONG.bat
+│   └── _LAUNCH_CLI_LONG.bat
 │
 └── configs/
     ├── train_500m_v3_phase1_body.yaml        # 500M v3 body training config
