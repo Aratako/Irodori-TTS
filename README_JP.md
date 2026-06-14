@@ -35,6 +35,17 @@ NVIDIA CUDA 12.8環境では `cu128` を使います。CPU、ROCm、Intel XPU �
 
 同期後のコマンド実行では、環境を再同期しないように `uv run --no-sync ...` を使うことを推奨します。
 
+
+## Windowsユーザー向けクイックスタート
+
+WindowsでVoiceDesignの長文生成を手軽に試したい場合は、`windows/` フォルダ内の補助バッチを使えます。
+
+1. `windows/_IRODORI_LOCAL_CONFIG.example.bat` をコピーして、`windows/_IRODORI_LOCAL_CONFIG.bat` にリネームします。
+2. Gradio UIを使う場合は、`windows/_LAUNCH_WebUI_LONG.bat` をダブルクリックします。
+3. CLIで長文生成する場合は、UTF-8のテキストファイルを `windows/_LAUNCH_CLI_LONG.bat` にドラッグ＆ドロップします。
+
+バッチファイルは `windows/` 内に置いたまま実行しますが、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダもリポジトリルート側に作成されます。
+
 ## 基本的な使い方
 
 ### 参照音声ありの推論

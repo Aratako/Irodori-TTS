@@ -758,9 +758,9 @@ def build_ui() -> gr.Blocks:
                 rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
             lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value="")
 
-        generate_btn = gr.Button("Generate", variant="primary")
+        generate_btn = gr.Button("Generate", variant="secondary")
 
-        with gr.Accordion("Long Generation / Export", open=False):
+        with gr.Accordion("Long Generation / Export", open=True):
             gr.Markdown(
                 "Split long text by punctuation/newlines, generate each chunk sequentially, then concatenate and export as WAV/MP3."
             )
@@ -801,7 +801,7 @@ def build_ui() -> gr.Blocks:
                     label="Write Parameters to MP3 Comment Tag",
                     value=_env_bool("IRODORI_LONG_WRITE_MP3_TAG", True),
                 )
-            long_generate_btn = gr.Button("Long Generate", variant="secondary")
+            long_generate_btn = gr.Button("Long Generate / Export", variant="primary")
             long_audio = gr.Audio(
                 label="Long Generated Audio",
                 type="filepath",

@@ -96,6 +96,17 @@ path. This was validated with AMD GPU inference.
 
 ## Quick Start
 
+
+### Windows quick start (optional)
+
+Windows users who want a simpler VoiceDesign long-form setup can use the helper batch files in `windows/`:
+
+1. Copy `windows/_IRODORI_LOCAL_CONFIG.example.bat` to `windows/_IRODORI_LOCAL_CONFIG.bat`.
+2. Double-click `windows/_LAUNCH_WebUI_LONG.bat` to open the VoiceDesign Gradio UI.
+3. For CLI long-form generation, drag and drop a UTF-8 text file onto `windows/_LAUNCH_CLI_LONG.bat`.
+
+The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders.
+
 ### Simple Inference
 
 ```bash
@@ -139,25 +150,6 @@ uv run --no-sync python infer.py \
   --caption "深く傷つき、今にも泣き出しそうな様子。声が震えており、悲痛なトーンで弱々しく話す。" \
   --output-wav outputs/sample_voice_design_clone.wav
 ```
-
-### Long-form VoiceDesign Generation
-
-For longer narration, use `--long` with a UTF-8 text file. The text is split into smaller chunks, synthesized sequentially, and then concatenated with optional pauses.
-
-```bash
-uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-600M-v3-VoiceDesign \
-  --text-file samples/narration.txt \
-  --caption "落ち着いたナレーション調で、自然なテンポで読み上げてください。" \
-  --no-ref \
-  --long \
-  --chunk-max-chars 80 \
-  --pause-ms 250 \
-  --output-format mp3 \
-  --output-dir outputs/long
-```
-
-Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub`, `mutagen`, and FFmpeg.
 
 ### Long-form VoiceDesign Generation
 
