@@ -99,13 +99,13 @@ path. This was validated with AMD GPU inference.
 
 ### Windows quick start (optional)
 
-Windows users who want a simpler VoiceDesign long-form setup can use the helper batch files in `windows/`:
+Windows users who want a simpler VoiceDesign long-form setup can use the helper batch files in the `windows/` folder:
 
-1. Copy `windows/_IRODORI_LOCAL_CONFIG.example.bat` to `windows/_IRODORI_LOCAL_CONFIG.bat`.
-2. Double-click `windows/_LAUNCH_WebUI_LONG.bat` to open the VoiceDesign Gradio UI.
-3. For CLI long-form generation, drag and drop a UTF-8 text file onto `windows/_LAUNCH_CLI_LONG.bat`.
+1. Open the `windows/` folder and double-click `_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI.
+2. For CLI long-form generation, drag and drop a UTF-8 text file onto `_LAUNCH_CLI_LONG.bat`.
+3. If you need custom model paths, ports, output folders, or offline mode, edit `_IRODORI_LOCAL_CONFIG.bat`. The launcher creates it from `_IRODORI_LOCAL_CONFIG.example.bat` automatically when it is missing.
 
-The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders.
+The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders. For fully offline use, set local checkpoint/codec paths in `_IRODORI_LOCAL_CONFIG.bat` and set `IRODORI_TTS_OFFLINE=1`.
 
 ### Simple Inference
 
@@ -201,25 +201,6 @@ uv run --no-sync python gradio_app_voicedesign.py --server-name 0.0.0.0 --server
 The hosted VoiceDesign demo is available at [Aratako/Irodori-TTS-600M-v3-VoiceDesign-Demo](https://huggingface.co/spaces/Aratako/Irodori-TTS-600M-v3-VoiceDesign-Demo).
 
 `gradio_app.py` is for `Aratako/Irodori-TTS-500M-v3`. `gradio_app_voicedesign.py` is for `Aratako/Irodori-TTS-600M-v3-VoiceDesign` and remains compatible with v2 VoiceDesign checkpoints.
-
-### Windows helper scripts
-
-Windows users can optionally use the helper batch files under `windows/` for VoiceDesign long-form generation. The batch files are designed to be run from inside the `windows/` directory while automatically using the repository root as the working directory.
-
-```text
-windows/_IRODORI_LOCAL_CONFIG.example.bat
-windows/_LAUNCH_WebUI_LONG.bat
-windows/_LAUNCH_CLI_LONG.bat
-```
-
-Recommended setup:
-
-1. Copy `windows/_IRODORI_LOCAL_CONFIG.example.bat` to `windows/_IRODORI_LOCAL_CONFIG.bat`.
-2. Edit the local config if you need custom model paths, ports, output folders, or offline mode.
-3. Double-click `windows/_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI.
-4. Drag and drop a UTF-8 text file onto `windows/_LAUNCH_CLI_LONG.bat` for CLI long-form generation.
-
-The helper scripts create `_vendor`, `_models`, and output folders at the repository root, not inside `windows/`.
 
 ## Inference
 

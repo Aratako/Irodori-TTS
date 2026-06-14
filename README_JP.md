@@ -40,11 +40,11 @@ NVIDIA CUDA 12.8環境では `cu128` を使います。CPU、ROCm、Intel XPU �
 
 WindowsでVoiceDesignの長文生成を手軽に試したい場合は、`windows/` フォルダ内の補助バッチを使えます。
 
-1. `windows/_IRODORI_LOCAL_CONFIG.example.bat` をコピーして、`windows/_IRODORI_LOCAL_CONFIG.bat` にリネームします。
-2. Gradio UIを使う場合は、`windows/_LAUNCH_WebUI_LONG.bat` をダブルクリックします。
-3. CLIで長文生成する場合は、UTF-8のテキストファイルを `windows/_LAUNCH_CLI_LONG.bat` にドラッグ＆ドロップします。
+1. `windows/` フォルダを開き、`_LAUNCH_WebUI_LONG.bat` をダブルクリックしてVoiceDesign Gradio UIを起動します。
+2. CLIで長文生成する場合は、UTF-8のテキストファイルを `_LAUNCH_CLI_LONG.bat` にドラッグ＆ドロップします。
+3. モデルパス、ポート、出力先、オフライン設定などを変更したい場合は、`_IRODORI_LOCAL_CONFIG.bat` を編集します。存在しない場合は、初回起動時に `_IRODORI_LOCAL_CONFIG.example.bat` から自動作成されます。
 
-バッチファイルは `windows/` 内に置いたまま実行しますが、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダもリポジトリルート側に作成されます。
+バッチファイルは `windows/` 内に置いたまま実行しますが、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダもリポジトリルート側に作成されます。完全オフラインで使う場合は、`_IRODORI_LOCAL_CONFIG.bat` でローカルのcheckpoint/codecパスを指定し、`IRODORI_TTS_OFFLINE=1` に設定してください。
 
 ## 基本的な使い方
 
@@ -135,30 +135,6 @@ uv run --no-sync python infer.py \
 - `--write-mp3-tag / --no-write-mp3-tag`: MP3コメントタグへのパラメータ書き込み
 
 MP3出力には `pydub`、`mutagen`、FFmpeg が必要です。
-
-## Windows用補助バッチ
-
-Windowsユーザー向けに、`windows/` フォルダ内の補助バッチを使うこともできます。
-
-```text
-windows/_IRODORI_LOCAL_CONFIG.example.bat
-windows/_LAUNCH_WebUI_LONG.bat
-windows/_LAUNCH_CLI_LONG.bat
-```
-
-基本手順:
-
-1. `windows/_IRODORI_LOCAL_CONFIG.example.bat` をコピーします。
-2. コピーしたファイルを `windows/_IRODORI_LOCAL_CONFIG.bat` にリネームします。
-3. 必要に応じてモデルパス、ポート、出力先、オフライン設定などを書き換えます。
-4. Gradioを使う場合は `windows/_LAUNCH_WebUI_LONG.bat` をダブルクリックします。
-5. CLI長文生成を使う場合は、UTF-8のテキストファイルを `windows/_LAUNCH_CLI_LONG.bat` にドラッグ＆ドロップします。
-
-バッチファイルは `windows/` 内に置いたまま実行する想定です。ただし、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダは `windows/` の中ではなく、リポジトリルート側に作成されます。
-
-## オフライン利用
-
-完全オフラインで使いたい場合は、Hugging Face repo IDではなく、ローカルの `.safetensors` やcodecファイルへのパスを指定してください。Windows補助バッチでは、`_IRODORI_LOCAL_CONFIG.bat` 内で `IRODORI_TTS_OFFLINE=1` に設定できます。
 
 ## トラブルシューティング
 
