@@ -101,11 +101,11 @@ path. This was validated with AMD GPU inference.
 
 Windows users who want a simpler VoiceDesign long-form setup can use the helper batch files in the `windows/` folder:
 
-1. Open the `windows/` folder and double-click `_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI.
+1. Open the `windows/` folder and double-click `_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI. On first launch, it prepares Python dependencies, FFmpeg, and the default model/codec files under `_models` as needed.
 2. For CLI long-form generation, drag and drop a UTF-8 text file onto `_LAUNCH_CLI_LONG.bat`.
-3. If you need custom model paths, ports, output folders, or offline mode, edit `_IRODORI_LOCAL_CONFIG.bat`. The launcher creates it from `_IRODORI_LOCAL_CONFIG.example.bat` automatically when it is missing.
+3. If you want to pre-download the model/codec manually, run `_DOWNLOAD_MODELS.bat`. If you need custom model paths, ports, output folders, or offline mode, edit `_IRODORI_LOCAL_CONFIG.bat`. The launcher creates it from `_IRODORI_LOCAL_CONFIG.example.bat` automatically when it is missing.
 
-The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders. For fully offline use, set local checkpoint/codec paths in `_IRODORI_LOCAL_CONFIG.bat` and set `IRODORI_TTS_OFFLINE=1`.
+The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders. After the first download, you can set `IRODORI_TTS_OFFLINE=1` in `_IRODORI_LOCAL_CONFIG.bat` to force local/offline use.
 
 ### Simple Inference
 
@@ -168,7 +168,7 @@ uv run --no-sync python infer.py \
   --output-dir outputs/long
 ```
 
-Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub`, `mutagen`, and FFmpeg.
+Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub` and FFmpeg.
 
 ### Speaker Inversion Inference
 
@@ -635,3 +635,5 @@ This project builds upon the following works:
   howpublished = {\url{https://github.com/Aratako/Irodori-TTS}}
 }
 ```
+
+On first launch, the Windows helper scripts automatically run `uv sync --extra cu128` when Python dependencies are not installed yet, download FFmpeg if needed, and download the default model/codec files into `_models` if they are missing. CPU-only users can edit `_IRODORI_LOCAL_CONFIG.bat` and set `IRODORI_UV_EXTRA=cpu`.

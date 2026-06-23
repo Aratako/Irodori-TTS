@@ -59,39 +59,18 @@ def _require_pydub():
         from pydub import AudioSegment
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
-            "pydub is required for long generation export. Install it with: uv pip install pydub mutagen"
+            "pydub is required for long generation export. Install it with: uv pip install pydub"
         ) from exc
     return AudioSegment
 
 
-def _write_mp3_comment_tag(mp3_path: Path, params: dict[str, Any]) -> None:
-    try:
-        from mutagen.id3 import ID3, COMM, TXXX
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(
-            "mutagen is required for MP3 metadata. Install it with: uv pip install mutagen"
-        ) from exc
-
-    try:
-        tags = ID3(str(mp3_path))
-    except Exception:
-        tags = ID3()
-
-    comment_json = json.dumps(params, ensure_ascii=False, indent=2)
-    try:
-        tags.delall("COMM")
-    except Exception:
-        pass
-    try:
-        tags.delall("TXXX:Irodori-TTS Parameters")
-    except Exception:
-        pass
-
-    # Write both standard comment and custom text frames for viewer compatibility.
-    tags.add(COMM(encoding=3, lang="jpn", desc="", text=comment_json))
-    tags.add(COMM(encoding=3, lang="jpn", desc="Irodori-TTS Parameters", text=comment_json))
-    tags.add(TXXX(encoding=3, desc="Irodori-TTS Parameters", text=comment_json))
-    tags.save(str(mp3_path), v2_version=3)
+def _mp3_comment_tag(metadata: dict[str, Any]) -> dict[str, str]:
+    """Build FFmpeg/pydub MP3 tags without requiring extra tag libraries."""
+    comment_json = json.dumps(metadata, ensure_ascii=False, indent=2)
+    return {
+        "comment": comment_json,
+        "description": comment_json,
+    }
 
 
 def export_long_audio(
@@ -129,30 +108,32 @@ def export_long_audio(
         if i != len(chunk_paths):
             combined += pause
 
+    final_audio = final_mp3 if output_format == "mp3" else final_wav
+    metadata = dict(metadata)
+    metadata.update(
+        {
+            "metadata_version": 1,
+            "output_audio": str(final_audio),
+            "output_wav": str(final_wav) if output_format == "wav" or options.keep_final_wav_when_mp3 else None,
+            "output_mp3": str(final_mp3) if output_format == "mp3" else None,
+            "output_format": output_format,
+            "pause_ms": int(options.pause_ms),
+            "final_duration_ms": len(combined),
+        }
+    )
+
     combined.export(final_wav, format="wav")
-    final_audio = final_wav
     if output_format == "mp3":
-        combined.export(final_mp3, format="mp3", bitrate="192k")
-        final_audio = final_mp3
+        export_kwargs: dict[str, Any] = {"format": "mp3", "bitrate": "192k"}
+        if options.write_mp3_tag:
+            export_kwargs["tags"] = _mp3_comment_tag(metadata)
+        combined.export(final_mp3, **export_kwargs)
         if not options.keep_final_wav_when_mp3:
             final_wav.unlink(missing_ok=True)
 
     if not options.keep_chunk_wavs:
         for wav_path in chunk_paths:
             wav_path.unlink(missing_ok=True)
-
-    metadata = dict(metadata)
-    metadata.update(
-        {
-            "metadata_version": 1,
-            "output_audio": str(final_audio),
-            "output_wav": str(final_wav) if final_wav.exists() else None,
-            "output_mp3": str(final_mp3) if final_mp3.exists() else None,
-            "output_format": output_format,
-            "pause_ms": int(options.pause_ms),
-            "final_duration_ms": len(combined),
-        }
-    )
 
     if options.save_json:
         json_path = output_dir / f"{output_stem}.json"
@@ -163,8 +144,5 @@ def export_long_audio(
             f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
         metadata["metadata_json"] = str(json_path)
         metadata["metadata_jsonl"] = str(jsonl_path)
-
-    if output_format == "mp3" and options.write_mp3_tag and final_mp3.exists():
-        _write_mp3_comment_tag(final_mp3, metadata)
 
     return final_audio, metadata

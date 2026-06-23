@@ -3,8 +3,8 @@ rem ============================================================
 rem Irodori-TTS Windows—pƒ[ƒJƒ‹İ’è—á
 rem
 rem g‚¢•û:
-rem   1. ‚±‚Ìƒtƒ@ƒCƒ‹‚ğ _IRODORI_LOCAL_CONFIG.bat ‚ÉƒRƒs[‚µ‚Ü‚·B
-rem   2. •K—v‚É‰‚¶‚Ä‰º‚Ì’l‚ğ‘‚«Š·‚¦‚Ü‚·B
+rem   1. ‚±‚Ìƒtƒ@ƒCƒ‹‚Í‰‰ñ‹N“®‚É _IRODORI_LOCAL_CONFIG.bat ‚ÖƒRƒs[‚³‚ê‚Ü‚·B
+rem   2. •K—v‚É‰‚¶‚Ä _IRODORI_LOCAL_CONFIG.bat ‚Ì’l‚ğ‘‚«Š·‚¦‚Ü‚·B
 rem   3. _LAUNCH_WebUI_LONG.bat ‚Ü‚½‚Í _LAUNCH_CLI_LONG.bat ‚ğÀs‚µ‚Ü‚·B
 rem
 rem ’ˆÓ:
@@ -16,19 +16,6 @@ rem ‚±‚Ìİ’èƒtƒ@ƒCƒ‹‚ª’u‚©‚ê‚Ä‚¢‚é windows ƒtƒHƒ‹ƒ_‚ÆAƒŠƒ|ƒWƒgƒŠƒ‹[ƒg‚ğ‹‚ß‚Ü‚
 set "IRODORI_WINDOWS_DIR=%~dp0"
 for %%I in ("%~dp0..") do set "IRODORI_ROOT=%%~fI"
 
-rem 1 ‚É‚·‚é‚Æ Hugging Face ‚ÖƒAƒNƒZƒX‚µ‚È‚¢ƒ[ƒJƒ‹/ƒIƒtƒ‰ƒCƒ“‰^—p‚ğ‘z’è‚µ‚Ü‚·B
-rem 0 ‚Ìê‡‚ÍŒö®”z•zó‘Ô‚É‹ß‚­AHF repo ID ‚ğ‚»‚Ì‚Ü‚Üg‚¢‚Ü‚·B
-set "IRODORI_TTS_OFFLINE=0"
-
-rem Œö®ƒfƒtƒHƒ‹ƒg‚Ìƒ‚ƒfƒ‹‚ÆCodec‚Ìrepo ID‚Å‚·B
-rem ƒIƒtƒ‰ƒCƒ“‰^—p‚·‚éê‡‚ÍAƒ[ƒJƒ‹‚Ì model.safetensors / weights.pth ‚Ö‚ÌƒpƒX‚É•ÏX‚µ‚Ä‚­‚¾‚³‚¢B
-set "IRODORI_TTS_CHECKPOINT=Aratako/Irodori-TTS-600M-v3-VoiceDesign"
-set "IRODORI_CODEC_REPO=Aratako/Semantic-DACVAE-Japanese-32dim"
-
-rem GradioƒT[ƒo[İ’è‚Å‚·B
-set "IRODORI_SERVER_NAME=127.0.0.1"
-set "IRODORI_SERVER_PORT=7861"
-
 rem •â•ƒtƒ@ƒCƒ‹‚Ì•Û‘¶æ‚Å‚·B
 rem windows ƒtƒHƒ‹ƒ_”z‰º‚Å‚Í‚È‚­AƒŠƒ|ƒWƒgƒŠƒ‹[ƒg‘¤‚Éì¬‚µ‚Ü‚·B
 set "IRODORI_VENDOR_DIR=%IRODORI_ROOT%\_vendor"
@@ -37,6 +24,30 @@ set "IRODORI_FFMPEG_ROOT=%IRODORI_VENDOR_DIR%\ffmpeg"
 set "IRODORI_FFMPEG_EXE=%IRODORI_FFMPEG_ROOT%\bin\ffmpeg.exe"
 set "IRODORI_FFMPEG_ZIP=%IRODORI_VENDOR_DIR%\ffmpeg-release-essentials.zip"
 set "IRODORI_FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+rem 1 ‚É‚·‚é‚Æ Hugging Face ‚ÖƒAƒNƒZƒX‚µ‚È‚¢ƒ[ƒJƒ‹/ƒIƒtƒ‰ƒCƒ“‰^—p‚ğ‘z’è‚µ‚Ü‚·B
+rem Šù’è‚Å‚Í _models ˆÈ‰º‚Ìƒ[ƒJƒ‹ƒtƒ@ƒCƒ‹‚ğ“Ç‚İ‚Ü‚·B
+rem ƒ‚ƒfƒ‹/Codec ‚ª–³‚¢ê‡‚Ì‚İAƒ‰ƒ“ƒ`ƒƒ[‚Ü‚½‚Í _DOWNLOAD_MODELS.bat ‚ªƒIƒ“ƒ‰ƒCƒ“æ“¾‚·‚é‚©Šm”F‚µ‚Ü‚·B
+set "IRODORI_TTS_OFFLINE=1"
+
+rem uv sync ‚Åg‚¤’Ç‰ÁˆË‘¶ƒOƒ‹[ƒv‚Å‚·B
+rem NVIDIA GPU ŠÂ‹«‚Å‚Í cu128ACPU‚Ì‚İ‚Ìê‡‚Í cpu ‚É•ÏX‚µ‚Ä‚­‚¾‚³‚¢B
+set "IRODORI_UV_EXTRA=cu128"
+
+rem ƒ‚ƒfƒ‹/Codec ‚Ìƒ_ƒEƒ“ƒ[ƒhŒ³‚Å‚·B
+rem _DOWNLOAD_MODELS.bat ‚ª _models ˆÈ‰º‚Ö•Û‘¶‚µ‚Ü‚·B
+set "IRODORI_TTS_SOURCE_REPO=Aratako/Irodori-TTS-600M-v3-VoiceDesign"
+set "IRODORI_CODEC_SOURCE_REPO=Aratako/Semantic-DACVAE-Japanese-32dim"
+set "IRODORI_TOKENIZER_REPO=llm-jp/llm-jp-3-150m"
+
+rem Šù’è‚Å‚Í _models ˆÈ‰º‚Ìƒ[ƒJƒ‹ƒtƒ@ƒCƒ‹‚ğ“Ç‚İ‚İ‚Ü‚·B
+rem ƒtƒ@ƒCƒ‹‚ª–³‚¢ê‡‚Íƒ‰ƒ“ƒ`ƒƒ[‚ª _DOWNLOAD_MODELS.bat ‚ğŒÄ‚Ño‚µ‚Ü‚·B
+set "IRODORI_TTS_CHECKPOINT=%IRODORI_LOCAL_MODELS_DIR%\Irodori-TTS-600M-v3-VoiceDesign\model.safetensors"
+set "IRODORI_CODEC_REPO=%IRODORI_LOCAL_MODELS_DIR%\Semantic-DACVAE-Japanese-32dim\weights.pth"
+
+rem GradioƒT[ƒo[İ’è‚Å‚·B
+set "IRODORI_SERVER_NAME=127.0.0.1"
+set "IRODORI_SERVER_PORT=7861"
 
 rem Gradio Long Generation ‚Ìo—Íæ‚Å‚·B
 set "IRODORI_OUTPUT_DIR=%IRODORI_ROOT%\gradio_outputs_voicedesign"

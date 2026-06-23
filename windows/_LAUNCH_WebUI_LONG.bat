@@ -49,16 +49,53 @@ if not exist "%IRODORI_FFMPEG_EXE%" (
 
 set "PATH=%IRODORI_FFMPEG_ROOT%\bin;%PATH%"
 
-uv run --no-sync python -c "import pydub, mutagen" >nul 2>nul
+uv run --no-sync python -c "import gradio" >nul 2>nul
 if errorlevel 1 (
-    echo [setup] Long Generation用の任意パッケージ pydub / mutagen をインストールします...
-    uv pip install pydub mutagen
+    echo [setup] Python依存関係がまだインストールされていません。
+    echo [setup] uv sync --extra %IRODORI_UV_EXTRA% を実行します...
+    uv sync --extra %IRODORI_UV_EXTRA%
     if errorlevel 1 (
-        echo [error] pydub / mutagen のインストールに失敗しました。
+        echo [error] uv sync に失敗しました。
         pause
         exit /b 1
     )
 )
+
+uv run --no-sync python -c "import pydub" >nul 2>nul
+if errorlevel 1 (
+    echo [setup] Long Generation用の任意パッケージ pydub をインストールします...
+    uv pip install pydub
+    if errorlevel 1 (
+        echo [error] pydub のインストールに失敗しました。
+        pause
+        exit /b 1
+    )
+)
+
+
+rem モデル/Codecが無ければ _models 以下へ取得するか確認します。
+if not exist "%IRODORI_TTS_CHECKPOINT%" (
+    echo [setup] ローカルモデルが見つかりません。_models 以下へ取得するか確認します...
+    call "windows\_DOWNLOAD_MODELS.bat" --no-pause
+    if errorlevel 1 (
+        echo [error] モデルの準備に失敗しました。
+        pause
+        exit /b 1
+    )
+)
+if not exist "%IRODORI_CODEC_REPO%" (
+    echo [setup] ローカルCodecが見つかりません。_models 以下へ取得するか確認します...
+    call "windows\_DOWNLOAD_MODELS.bat" --no-pause
+    if errorlevel 1 (
+        echo [error] Codecの準備に失敗しました。
+        pause
+        exit /b 1
+    )
+)
+
+rem 古い設定ファイルでHF repo IDが残っている場合も、_modelsに保存済みならローカルファイルを優先します。
+if exist "%IRODORI_LOCAL_MODELS_DIR%\Irodori-TTS-600M-v3-VoiceDesign\model.safetensors" set "IRODORI_TTS_CHECKPOINT=%IRODORI_LOCAL_MODELS_DIR%\Irodori-TTS-600M-v3-VoiceDesign\model.safetensors"
+if exist "%IRODORI_LOCAL_MODELS_DIR%\Semantic-DACVAE-Japanese-32dim\weights.pth" set "IRODORI_CODEC_REPO=%IRODORI_LOCAL_MODELS_DIR%\Semantic-DACVAE-Japanese-32dim\weights.pth"
 
 echo [launch] Irodori-TTS VoiceDesign Gradio を起動します...
 echo [config] server: http://%IRODORI_SERVER_NAME%:%IRODORI_SERVER_PORT%

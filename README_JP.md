@@ -40,11 +40,11 @@ NVIDIA CUDA 12.8環境では `cu128` を使います。CPU、ROCm、Intel XPU �
 
 WindowsでVoiceDesignの長文生成を手軽に試したい場合は、`windows/` フォルダ内の補助バッチを使えます。
 
-1. `windows/` フォルダを開き、`_LAUNCH_WebUI_LONG.bat` をダブルクリックしてVoiceDesign Gradio UIを起動します。
+1. `windows/` フォルダを開き、`_LAUNCH_WebUI_LONG.bat` をダブルクリックしてVoiceDesign Gradio UIを起動します。初回は必要に応じてPython依存関係、FFmpeg、既定のモデル/Codecを `_models` 以下へ自動準備します。
 2. CLIで長文生成する場合は、UTF-8のテキストファイルを `_LAUNCH_CLI_LONG.bat` にドラッグ＆ドロップします。
-3. モデルパス、ポート、出力先、オフライン設定などを変更したい場合は、`_IRODORI_LOCAL_CONFIG.bat` を編集します。存在しない場合は、初回起動時に `_IRODORI_LOCAL_CONFIG.example.bat` から自動作成されます。
+3. モデル/Codecだけを先に取得したい場合は `_DOWNLOAD_MODELS.bat` を実行します。モデルパス、ポート、出力先、オフライン設定などを変更したい場合は、`_IRODORI_LOCAL_CONFIG.bat` を編集します。存在しない場合は、初回起動時に `_IRODORI_LOCAL_CONFIG.example.bat` から自動作成されます。
 
-バッチファイルは `windows/` 内に置いたまま実行しますが、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダもリポジトリルート側に作成されます。完全オフラインで使う場合は、`_IRODORI_LOCAL_CONFIG.bat` でローカルのcheckpoint/codecパスを指定し、`IRODORI_TTS_OFFLINE=1` に設定してください。
+バッチファイルは `windows/` 内に置いたまま実行しますが、作業ディレクトリは自動的にリポジトリルートへ移動します。`_vendor`、`_models`、出力フォルダもリポジトリルート側に作成されます。既定では `_IRODORI_LOCAL_CONFIG.bat` の `IRODORI_TTS_OFFLINE=1` に設定され、ローカル/オフライン利用を優先します。モデル/Codecが `_models` 以下に無い場合のみ、オンラインに切り替えてダウンロードするか確認します。
 
 ## 基本的な使い方
 
@@ -134,7 +134,7 @@ uv run --no-sync python infer.py \
 - `--save-json / --no-save-json`: JSON / JSONL メタデータ保存
 - `--write-mp3-tag / --no-write-mp3-tag`: MP3コメントタグへのパラメータ書き込み
 
-MP3出力には `pydub`、`mutagen`、FFmpeg が必要です。
+MP3出力には `pydub` と FFmpeg が必要です。
 
 ## トラブルシューティング
 
@@ -150,3 +150,5 @@ MP3出力には `pydub`、`mutagen`、FFmpeg が必要です。
 ## ライセンス
 
 コードはMITライセンスです。モデル重み、学習データ、外部依存ライブラリのライセンスについては、それぞれの配布元を確認してください。
+
+初回起動時にPython依存関係が未導入の場合、Windows補助batが自動で `uv sync --extra cu128` を実行します。また、FFmpegや既定のモデル/Codecが見つからない場合も自動で取得します。CPUのみの環境では `_IRODORI_LOCAL_CONFIG.bat` の `IRODORI_UV_EXTRA=cpu` に変更してください。
