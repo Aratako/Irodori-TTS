@@ -61,18 +61,6 @@ if errorlevel 1 (
     )
 )
 
-uv run --no-sync python -c "import pydub" >nul 2>nul
-if errorlevel 1 (
-    echo [setup] Long Generation用の任意パッケージ pydub をインストールします...
-    uv pip install pydub
-    if errorlevel 1 (
-        echo [error] pydub のインストールに失敗しました。
-        pause
-        exit /b 1
-    )
-)
-
-
 rem モデル/Codecが無ければ _models 以下へ取得するか確認します。
 if not exist "%IRODORI_TTS_CHECKPOINT%" (
     echo [setup] ローカルモデルが見つかりません。_models 以下へ取得するか確認します...

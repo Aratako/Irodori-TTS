@@ -155,7 +155,7 @@ def main() -> None:
     parser.add_argument(
         "--ffmpeg-exe",
         default=None,
-        help="Optional ffmpeg executable path used by pydub for --long MP3 export.",
+        help="Optional ffmpeg executable path used for --long MP3 export.",
     )
     parser.add_argument(
         "--model-device",

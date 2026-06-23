@@ -168,7 +168,7 @@ uv run --no-sync python infer.py \
   --output-dir outputs/long
 ```
 
-Use `--output-format wav` if you want a final WAV file instead. MP3 export requires `pydub` and FFmpeg.
+Use `--output-format wav` if you want a final WAV file instead. MP3 export requires FFmpeg. Long-form WAV joining uses the existing `soundfile` dependency, and MP3 generation parameters are embedded as ID3v2.3 `COMM` / `TXXX` tags without mutagen or pydub.
 
 ### Speaker Inversion Inference
 

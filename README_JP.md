@@ -134,7 +134,7 @@ uv run --no-sync python infer.py \
 - `--save-json / --no-save-json`: JSON / JSONL メタデータ保存
 - `--write-mp3-tag / --no-write-mp3-tag`: MP3コメントタグへのパラメータ書き込み
 
-MP3出力には `pydub` と FFmpeg が必要です。
+MP3出力には FFmpeg が必要です。長文WAV結合は既存依存の `soundfile` を使い、MP3の生成パラメーターは mutagen / pydub を使わず、ID3v2.3 の `COMM` / `TXXX` タグとして書き込みます。
 
 ## トラブルシューティング
 
