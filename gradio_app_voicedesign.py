@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
+
 
 import gradio as gr
 from huggingface_hub import hf_hub_download
 
 from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
+from irodori_tts.long_generation import LongExportOptions, export_long_audio, split_long_text
 from irodori_tts.inference_runtime import (
     RuntimeKey,
     SamplingRequest,
@@ -25,7 +28,32 @@ MAX_GRADIO_CANDIDATES = 32
 GRADIO_AUDIO_COLS_PER_ROW = 8
 
 
+def _env_str(name: str, default: str = "") -> str:
+    value = os.environ.get(name, "").strip()
+    return value if value else default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
 def _default_checkpoint() -> str:
+    env_checkpoint = _env_str("IRODORI_TTS_CHECKPOINT")
+    if env_checkpoint:
+        return env_checkpoint
     candidates = sorted(
         [
             *Path(".").glob("**/checkpoint_*.pt"),
@@ -149,7 +177,7 @@ def _build_runtime_key(
     return RuntimeKey(
         checkpoint=checkpoint_path,
         model_device=str(model_device),
-        codec_repo="Aratako/Semantic-DACVAE-Japanese-32dim",
+        codec_repo=_env_str("IRODORI_CODEC_REPO", "Aratako/Semantic-DACVAE-Japanese-32dim"),
         model_precision=str(model_precision),
         codec_device=str(codec_device),
         codec_precision=str(codec_precision),
@@ -377,6 +405,209 @@ def _run_generation(
     return (*audio_updates, detail_text, timing_text)
 
 
+def _run_generation_long(
+    checkpoint: str,
+    model_device: str,
+    model_precision: str,
+    codec_device: str,
+    codec_precision: str,
+    text: str,
+    caption: str,
+    ref_wav: str | None,
+    num_steps: int,
+    seed_raw: str,
+    seconds_raw: str,
+    duration_scale: float,
+    t_schedule_mode: str,
+    sway_coeff: float,
+    cfg_guidance_mode: str,
+    cfg_scale_text: float,
+    cfg_scale_caption: float,
+    cfg_scale_speaker: float,
+    cfg_scale_raw: str,
+    cfg_min_t: float,
+    cfg_max_t: float,
+    context_kv_cache: bool,
+    speaker_kv_scale_raw: str,
+    max_text_len_raw: str,
+    max_caption_len_raw: str,
+    truncation_factor_raw: str,
+    rescale_k_raw: str,
+    rescale_sigma_raw: str,
+    lora_adapter_raw: str,
+    chunk_max_chars: int,
+    pause_ms: int,
+    output_format: str,
+    keep_final_wav_when_mp3: bool,
+    keep_chunk_wavs: bool,
+    save_json: bool,
+    write_mp3_tag: bool,
+) -> tuple[object, str, str]:
+    def stdout_log(msg: str) -> None:
+        print(msg, flush=True)
+
+    runtime_key = _build_runtime_key(
+        checkpoint=checkpoint,
+        model_device=model_device,
+        model_precision=model_precision,
+        codec_device=codec_device,
+        codec_precision=codec_precision,
+    )
+    text_value = "" if text is None else str(text).strip()
+    caption_value = "" if caption is None else str(caption).strip()
+    if text_value == "":
+        raise ValueError("text is required.")
+    if int(chunk_max_chars) < 20:
+        raise ValueError("chunk_max_chars must be >= 20.")
+    if int(pause_ms) < 0:
+        raise ValueError("pause_ms must be >= 0.")
+
+    cfg_scale = _parse_optional_float(cfg_scale_raw, "cfg_scale")
+    max_text_len = _parse_optional_int(max_text_len_raw, "max_text_len")
+    max_caption_len = _parse_optional_int(max_caption_len_raw, "max_caption_len")
+    truncation_factor = _parse_optional_float(truncation_factor_raw, "truncation_factor")
+    rescale_k = _parse_optional_float(rescale_k_raw, "rescale_k")
+    rescale_sigma = _parse_optional_float(rescale_sigma_raw, "rescale_sigma")
+    speaker_kv_scale = _parse_optional_float(speaker_kv_scale_raw, "speaker_kv_scale")
+    seed = _parse_optional_int(seed_raw, "seed")
+    manual_seconds = _parse_optional_float(seconds_raw, "seconds")
+    lora_adapter = _parse_optional_str(lora_adapter_raw)
+
+    runtime, reloaded = get_cached_runtime(runtime_key)
+    if not runtime.model_cfg.use_caption_condition:
+        raise ValueError(
+            "Loaded checkpoint does not enable caption conditioning. Use gradio_app.py for reference-audio inference."
+        )
+
+    ref_wav_path = _resolve_ref_wav(ref_wav)
+    effective_no_ref = ref_wav_path is None or not runtime.model_cfg.use_speaker_condition_resolved
+    if effective_no_ref:
+        ref_wav_path = None
+
+    chunks = split_long_text(text_value, max_chars=int(chunk_max_chars))
+    output_dir = Path(_env_str("IRODORI_OUTPUT_DIR", "gradio_outputs_voicedesign")) / "long"
+    output_stem = datetime.now().strftime("irodori_long_%Y%m%d_%H%M%S")
+    chunk_dir = output_dir / "chunks" / output_stem
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    stdout_log(f"[gradio-long] runtime: {'reloaded' if reloaded else 'reused'}")
+    stdout_log(f"[gradio-long] chunks: {len(chunks)}")
+
+    chunk_wavs: list[Path] = []
+    chunk_logs: list[dict[str, object]] = []
+    timing_lines: list[str] = []
+    sample_rate = None
+
+    for index, chunk_text in enumerate(chunks, start=1):
+        chunk_seed = None if seed is None else int(seed) + index - 1
+        stdout_log(f"[gradio-long] chunk {index}/{len(chunks)}: {chunk_text}")
+        result = runtime.synthesize(
+            SamplingRequest(
+                text=chunk_text,
+                caption=caption_value or None,
+                ref_wav=ref_wav_path,
+                ref_latent=None,
+                no_ref=effective_no_ref,
+                ref_normalize_db=-16.0,
+                ref_ensure_max=True,
+                num_candidates=1,
+                decode_mode="sequential",
+                seconds=manual_seconds,
+                duration_scale=float(duration_scale),
+                max_ref_seconds=30.0,
+                max_text_len=max_text_len,
+                max_caption_len=max_caption_len,
+                num_steps=int(num_steps),
+                seed=chunk_seed,
+                cfg_guidance_mode=str(cfg_guidance_mode),
+                cfg_scale_text=float(cfg_scale_text),
+                cfg_scale_caption=float(cfg_scale_caption),
+                cfg_scale_speaker=0.0 if effective_no_ref else float(cfg_scale_speaker),
+                cfg_scale=cfg_scale,
+                cfg_min_t=float(cfg_min_t),
+                cfg_max_t=float(cfg_max_t),
+                truncation_factor=truncation_factor,
+                rescale_k=rescale_k,
+                rescale_sigma=rescale_sigma,
+                context_kv_cache=bool(context_kv_cache),
+                speaker_kv_scale=None if effective_no_ref else speaker_kv_scale,
+                speaker_kv_min_t=None,
+                speaker_kv_max_layers=None,
+                t_schedule_mode=str(t_schedule_mode),
+                sway_coeff=float(sway_coeff),
+                trim_tail=True,
+                lora_adapter=lora_adapter,
+            ),
+            log_fn=stdout_log,
+        )
+        sample_rate = result.sample_rate
+        chunk_wav = chunk_dir / f"{output_stem}_chunk_{index:03d}.wav"
+        saved_chunk = save_wav(chunk_wav, result.audio, result.sample_rate)
+        chunk_wavs.append(Path(saved_chunk))
+        chunk_logs.append(
+            {
+                "index": index,
+                "text": chunk_text,
+                "seed_requested": chunk_seed,
+                "seed_used": result.used_seed,
+                "wav": str(saved_chunk),
+                "messages": result.messages,
+                "total_to_decode": result.total_to_decode,
+            }
+        )
+        timing_lines.append(
+            f"chunk[{index}]: total_to_decode={result.total_to_decode:.3f}s"
+        )
+
+    metadata = {
+        "mode": "gradio_voicedesign_long",
+        "checkpoint": str(runtime_key.checkpoint),
+        "codec_repo": str(runtime_key.codec_repo),
+        "text": text_value,
+        "caption": caption_value,
+        "sample_rate": sample_rate,
+        "chunk_max_chars": int(chunk_max_chars),
+        "chunks": chunk_logs,
+        "num_steps": int(num_steps),
+        "seed_base": seed,
+        "seconds": manual_seconds,
+        "duration_scale": float(duration_scale),
+        "cfg_guidance_mode": str(cfg_guidance_mode),
+        "cfg_scale_text": float(cfg_scale_text),
+        "cfg_scale_caption": float(cfg_scale_caption),
+        "cfg_scale_speaker": 0.0 if effective_no_ref else float(cfg_scale_speaker),
+        "ref_wav": ref_wav_path,
+        "no_ref": effective_no_ref,
+    }
+    final_audio, final_metadata = export_long_audio(
+        chunk_wavs=chunk_wavs,
+        options=LongExportOptions(
+            output_dir=output_dir,
+            output_stem=output_stem,
+            output_format=str(output_format),
+            pause_ms=int(pause_ms),
+            keep_final_wav_when_mp3=bool(keep_final_wav_when_mp3),
+            keep_chunk_wavs=bool(keep_chunk_wavs),
+            save_json=bool(save_json),
+            write_mp3_tag=bool(write_mp3_tag),
+            ffmpeg_exe=_env_str("IRODORI_FFMPEG_EXE", None),
+        ),
+        metadata=metadata,
+    )
+
+    detail_lines = [
+        "long generation completed",
+        f"runtime: {'reloaded' if reloaded else 'reused'}",
+        f"chunks: {len(chunks)}",
+        f"saved audio: {final_audio}",
+    ]
+    if final_metadata.get("metadata_json"):
+        detail_lines.append(f"saved json: {final_metadata['metadata_json']}")
+    if final_metadata.get("metadata_jsonl"):
+        detail_lines.append(f"saved jsonl: {final_metadata['metadata_jsonl']}")
+    return str(final_audio), "\n".join(detail_lines), "\n".join(timing_lines)
+
+
 def _clear_runtime_cache() -> str:
     clear_cached_runtime()
     return "cleared loaded model from memory"
@@ -393,7 +624,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Irodori-TTS VoiceDesign Gradio") as demo:
         gr.Markdown("# Irodori-TTS VoiceDesign Inference")
         gr.Markdown(
-            "VoiceDesign版モデル向けのUIです。caption を入れると caption / style conditioning、空欄なら text-only conditioning で推論します。"
+            "VoiceDesign UI for caption-conditioned checkpoints. Use a caption/style prompt for style conditioning, or leave it blank for text-only conditioning."
         )
 
         with gr.Row():
@@ -527,7 +758,55 @@ def build_ui() -> gr.Blocks:
                 rescale_sigma_raw = gr.Textbox(label="Rescale sigma (optional)", value="")
             lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value="")
 
-        generate_btn = gr.Button("Generate", variant="primary")
+        generate_btn = gr.Button("Generate", variant="secondary")
+
+        with gr.Accordion("Long Generation / Export", open=True):
+            gr.Markdown(
+                "Split long text by punctuation/newlines, generate each chunk sequentially, then concatenate and export as WAV/MP3."
+            )
+            with gr.Row():
+                chunk_max_chars = gr.Slider(
+                    label="Chunk Max Chars",
+                    minimum=20,
+                    maximum=200,
+                    value=_env_int("IRODORI_LONG_CHUNK_MAX_CHARS", 80),
+                    step=1,
+                )
+                pause_ms = gr.Slider(
+                    label="Pause Between Chunks ms",
+                    minimum=0,
+                    maximum=1500,
+                    value=_env_int("IRODORI_LONG_PAUSE_MS", 250),
+                    step=50,
+                )
+                output_format = gr.Dropdown(
+                    label="Output Format",
+                    choices=["wav", "mp3"],
+                    value=_env_str("IRODORI_LONG_OUTPUT_FORMAT", "mp3"),
+                )
+            with gr.Row():
+                keep_final_wav_when_mp3 = gr.Checkbox(
+                    label="Keep Final WAV when Output Format = MP3",
+                    value=_env_bool("IRODORI_LONG_KEEP_FINAL_WAV_WHEN_MP3", False),
+                )
+                keep_chunk_wavs = gr.Checkbox(
+                    label="Keep Chunk WAVs",
+                    value=_env_bool("IRODORI_LONG_KEEP_CHUNK_WAVS", True),
+                )
+                save_json = gr.Checkbox(
+                    label="Save JSON / JSONL Metadata",
+                    value=_env_bool("IRODORI_LONG_SAVE_JSON", True),
+                )
+                write_mp3_tag = gr.Checkbox(
+                    label="Write Parameters to MP3 Comment Tag",
+                    value=_env_bool("IRODORI_LONG_WRITE_MP3_TAG", True),
+                )
+            long_generate_btn = gr.Button("Long Generate / Export", variant="primary")
+            long_audio = gr.Audio(
+                label="Long Generated Audio",
+                type="filepath",
+                interactive=False,
+            )
 
         out_audios: list[gr.Audio] = []
         num_rows = (
@@ -587,6 +866,48 @@ def build_ui() -> gr.Blocks:
                 lora_adapter_raw,
             ],
             outputs=[*out_audios, out_log, out_timing],
+        )
+        long_generate_btn.click(
+            _run_generation_long,
+            inputs=[
+                checkpoint,
+                model_device,
+                model_precision,
+                codec_device,
+                codec_precision,
+                text,
+                caption,
+                ref_wav,
+                num_steps,
+                seed_raw,
+                seconds_raw,
+                duration_scale,
+                t_schedule_mode,
+                sway_coeff,
+                cfg_guidance_mode,
+                cfg_scale_text,
+                cfg_scale_caption,
+                cfg_scale_speaker,
+                cfg_scale_raw,
+                cfg_min_t,
+                cfg_max_t,
+                context_kv_cache,
+                speaker_kv_scale_raw,
+                max_text_len_raw,
+                max_caption_len_raw,
+                truncation_factor_raw,
+                rescale_k_raw,
+                rescale_sigma_raw,
+                lora_adapter_raw,
+                chunk_max_chars,
+                pause_ms,
+                output_format,
+                keep_final_wav_when_mp3,
+                keep_chunk_wavs,
+                save_json,
+                write_mp3_tag,
+            ],
+            outputs=[long_audio, out_log, out_timing],
         )
         model_device.change(
             _on_model_device_change, inputs=[model_device], outputs=[model_precision]

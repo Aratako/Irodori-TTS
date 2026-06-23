@@ -1,5 +1,7 @@
 # Irodori-TTS
 
+[English](README.md) | [日本語](README_JP.md)
+
 [![Model](https://img.shields.io/badge/Model-HuggingFace-yellow)](https://huggingface.co/Aratako/Irodori-TTS-500M-v3)
 [![VoiceDesign](https://img.shields.io/badge/VoiceDesign-HuggingFace-orange)](https://huggingface.co/Aratako/Irodori-TTS-600M-v3-VoiceDesign)
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Space-blue)](https://huggingface.co/spaces/Aratako/Irodori-TTS-500M-v3-Demo)
@@ -32,6 +34,7 @@ For model weights and audio samples, please refer to the [base model card](https
 - **PEFT LoRA Fine-Tuning**: Parameter-efficient adaptation with PEFT/LoRA for released checkpoints
 - **Speaker Inversion**: Learn reusable speaker embedding tokens for a target voice while freezing the base model
 - **Flexible Inference**: CLI, Gradio Web UI, and HuggingFace Hub checkpoint support
+- **Long-form Generation**: Split longer narration into chunks, synthesize them sequentially, and export the result as WAV or MP3 with optional metadata
 
 ## Architecture
 
@@ -93,6 +96,17 @@ path. This was validated with AMD GPU inference.
 
 ## Quick Start
 
+
+### Windows quick start (optional)
+
+Windows users who want a simpler VoiceDesign long-form setup can use the helper batch files in the `windows/` folder:
+
+1. Open the `windows/` folder and double-click `_LAUNCH_WebUI_LONG.bat` to launch the VoiceDesign Gradio UI. On first launch, it prepares Python dependencies, FFmpeg, and the default model/codec files under `_models` as needed.
+2. For CLI long-form generation, drag and drop a UTF-8 text file onto `_LAUNCH_CLI_LONG.bat`.
+3. If you want to pre-download the model/codec manually, run `_DOWNLOAD_MODELS.bat`. If you need custom model paths, ports, output folders, or offline mode, edit `_IRODORI_LOCAL_CONFIG.bat`. The launcher creates it from `_IRODORI_LOCAL_CONFIG.example.bat` automatically when it is missing.
+
+The helper scripts are run from inside the `windows/` directory, but they automatically use the repository root for `_vendor`, `_models`, and output folders. After the first download, you can set `IRODORI_TTS_OFFLINE=1` in `_IRODORI_LOCAL_CONFIG.bat` to force local/offline use.
+
 ### Simple Inference
 
 ```bash
@@ -136,6 +150,25 @@ uv run --no-sync python infer.py \
   --caption "深く傷つき、今にも泣き出しそうな様子。声が震えており、悲痛なトーンで弱々しく話す。" \
   --output-wav outputs/sample_voice_design_clone.wav
 ```
+
+### Long-form VoiceDesign Generation
+
+For longer narration, use `--long` with a UTF-8 text file. The text is split into smaller chunks, synthesized sequentially, and then concatenated with optional pauses.
+
+```bash
+uv run --no-sync python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-600M-v3-VoiceDesign \
+  --text-file samples/narration.txt \
+  --caption "落ち着いたナレーション調で、自然なテンポで読み上げてください。" \
+  --no-ref \
+  --long \
+  --chunk-max-chars 80 \
+  --pause-ms 250 \
+  --output-format mp3 \
+  --output-dir outputs/long
+```
+
+Use `--output-format wav` if you want a final WAV file instead. MP3 export requires FFmpeg. Long-form WAV joining uses the existing `soundfile` dependency, and MP3 generation parameters are embedded as ID3v2.3 `COMM` / `TXXX` tags without mutagen or pydub.
 
 ### Speaker Inversion Inference
 
@@ -534,6 +567,7 @@ Irodori-TTS/
 ├── infer.py                    # CLI inference
 ├── gradio_app.py               # Gradio web UI
 ├── gradio_app_voicedesign.py   # Gradio web UI for VoiceDesign checkpoints
+├── README_JP.md                 # Japanese end-user guide
 ├── prepare_manifest.py         # Dataset -> DACVAE latent preprocessing
 ├── convert_checkpoint_to_safetensors.py  # Checkpoint converter
 │
@@ -548,11 +582,17 @@ Irodori-TTS/
 │   ├── tokenizer.py            # Pretrained LLM tokenizer wrapper
 │   ├── config.py               # Model / Train / Sampling config dataclasses
 │   ├── inference_runtime.py    # Cached, thread-safe inference runtime
+│   ├── long_generation.py      # Long-form generation export utilities
 │   ├── lora.py                 # PEFT LoRA integration helpers
 │   ├── speaker_inversion.py    # Speaker Inversion embedding save/load helpers
 │   ├── text_normalization.py   # Japanese text normalization
 │   ├── optim.py                # Muon + AdamW optimizer
 │   └── progress.py             # Training progress tracker
+│
+├── windows/                    # Optional Windows helper scripts
+│   ├── _IRODORI_LOCAL_CONFIG.example.bat
+│   ├── _LAUNCH_WebUI_LONG.bat
+│   └── _LAUNCH_CLI_LONG.bat
 │
 └── configs/
     ├── train_500m_v3_phase1_body.yaml        # 500M v3 body training config
@@ -595,3 +635,5 @@ This project builds upon the following works:
   howpublished = {\url{https://github.com/Aratako/Irodori-TTS}}
 }
 ```
+
+On first launch, the Windows helper scripts automatically run `uv sync --extra cu128` when Python dependencies are not installed yet, download FFmpeg if needed, and download the default model/codec files into `_models` if they are missing. CPU-only users can edit `_IRODORI_LOCAL_CONFIG.bat` and set `IRODORI_UV_EXTRA=cpu`.
