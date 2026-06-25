@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
@@ -32,6 +33,19 @@ def _parse_optional_float(value: str) -> float | None:
     return out
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_local_files_only(args: argparse.Namespace) -> bool:
+    if args.local_files_only is not None:
+        return bool(args.local_files_only)
+    return _env_flag_enabled("HF_HUB_OFFLINE")
+
+
 def _print_timings(timings: list[tuple[str, float]], total_to_decode: float) -> None:
     print("[timing] ---- post-model-load to decode ----")
     for name, sec in timings:
@@ -39,7 +53,7 @@ def _print_timings(timings: list[tuple[str, float]], total_to_decode: float) -> 
     print(f"[timing] total_to_decode: {total_to_decode:.3f} s")
 
 
-def _resolve_checkpoint_path(args: argparse.Namespace) -> str:
+def _resolve_checkpoint_path(args: argparse.Namespace, *, local_files_only: bool = False) -> str:
     if args.checkpoint is not None:
         checkpoint_path = Path(str(args.checkpoint)).expanduser()
         if not checkpoint_path.is_file():
@@ -54,6 +68,7 @@ def _resolve_checkpoint_path(args: argparse.Namespace) -> str:
     checkpoint_path = hf_hub_download(
         repo_id=repo_id,
         filename="model.safetensors",
+        local_files_only=bool(local_files_only),
     )
     print(
         f"[checkpoint] downloaded model.safetensors from hf://{repo_id} -> {checkpoint_path}",
@@ -84,6 +99,15 @@ def main() -> None:
         help=(
             "Optional PEFT LoRA adapter directory to load dynamically for this inference run. "
             "The adapter is applied at runtime and is not merged into the base checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Resolve Hugging Face checkpoint, tokenizer, and codec files from the local "
+            "cache only. Defaults to enabled when HF_HUB_OFFLINE is set."
         ),
     )
     parser.add_argument("--text", required=True)
@@ -371,13 +395,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    checkpoint_path = _resolve_checkpoint_path(args)
+    local_files_only = _resolve_local_files_only(args)
+    checkpoint_path = _resolve_checkpoint_path(args, local_files_only=local_files_only)
 
     runtime = InferenceRuntime.from_key(
         RuntimeKey(
             checkpoint=checkpoint_path,
             model_device=str(args.model_device),
             codec_repo=str(args.codec_repo),
+            local_files_only=bool(local_files_only),
             model_precision=str(args.model_precision),
             codec_device=str(args.codec_device),
             codec_precision=str(args.codec_precision),

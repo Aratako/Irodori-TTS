@@ -181,6 +181,7 @@ class RuntimeKey:
     checkpoint: str
     model_device: str
     codec_repo: str = "Aratako/Semantic-DACVAE-Japanese-32dim"
+    local_files_only: bool = False
     model_precision: str = "fp32"
     codec_device: str = "cpu"
     codec_precision: str = "fp32"
@@ -505,6 +506,7 @@ class InferenceRuntime:
             Path(key.checkpoint)
         )
         model_cfg = ModelConfig(**model_cfg_dict)
+        local_files_only = bool(key.local_files_only)
 
         model = TextToLatentRFDiT(model_cfg).to(model_device)
         model.load_state_dict(model_state)
@@ -519,7 +521,7 @@ class InferenceRuntime:
         tokenizer = PretrainedTextTokenizer.from_pretrained(
             repo_id=model_cfg.text_tokenizer_repo,
             add_bos=bool(model_cfg.text_add_bos),
-            local_files_only=False,
+            local_files_only=local_files_only,
         )
         if tokenizer.vocab_size != model_cfg.text_vocab_size:
             raise ValueError(
@@ -531,7 +533,7 @@ class InferenceRuntime:
             caption_tokenizer = PretrainedTextTokenizer.from_pretrained(
                 repo_id=model_cfg.caption_tokenizer_repo_resolved,
                 add_bos=model_cfg.caption_add_bos_resolved,
-                local_files_only=False,
+                local_files_only=local_files_only,
             )
             if caption_tokenizer.vocab_size != model_cfg.caption_vocab_size_resolved:
                 raise ValueError(
@@ -557,6 +559,7 @@ class InferenceRuntime:
             dtype=codec_dtype,
             deterministic_encode=bool(key.codec_deterministic_encode),
             deterministic_decode=bool(key.codec_deterministic_decode),
+            local_files_only=local_files_only,
         )
         if model_cfg.latent_dim != codec.latent_dim:
             raise ValueError(

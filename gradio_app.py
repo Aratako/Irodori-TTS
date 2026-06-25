@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,13 @@ from irodori_tts.speaker_inversion import is_speaker_inversion_safetensors_path
 
 MAX_GRADIO_CANDIDATES = 32
 GRADIO_AUDIO_COLS_PER_ROW = 8
+
+
+def _hf_hub_offline_enabled() -> bool:
+    value = os.environ.get("HF_HUB_OFFLINE")
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_checkpoint() -> str:
@@ -156,7 +164,12 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     if suffix in {".pt", ".safetensors"}:
         return checkpoint
 
-    resolved = hf_hub_download(repo_id=checkpoint, filename="model.safetensors")
+    local_files_only = _hf_hub_offline_enabled()
+    resolved = hf_hub_download(
+        repo_id=checkpoint,
+        filename="model.safetensors",
+        local_files_only=local_files_only,
+    )
     print(f"[gradio] checkpoint: hf://{checkpoint} -> {resolved}", flush=True)
     return str(resolved)
 
@@ -173,6 +186,7 @@ def _build_runtime_key(
         checkpoint=checkpoint_path,
         model_device=str(model_device),
         codec_repo="Aratako/Semantic-DACVAE-Japanese-32dim",
+        local_files_only=_hf_hub_offline_enabled(),
         model_precision=str(model_precision),
         codec_device=str(codec_device),
         codec_precision=str(codec_precision),

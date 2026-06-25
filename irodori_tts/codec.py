@@ -54,6 +54,7 @@ class DACVAECodec:
         deterministic_encode: bool = True,
         deterministic_decode: bool = True,
         normalize_db: float | None = -16.0,
+        local_files_only: bool = False,
     ) -> DACVAECodec:
         # Prefer installed package; fallback to local clone at ../dacvae.
         try:
@@ -69,9 +70,15 @@ class DACVAECodec:
             location = location[len("hf://") :]
         if not Path(location).exists() and "/" in location and not location.endswith(".pth"):
             try:
-                location = hf_hub_download(repo_id=location, filename="weights.pth")
+                location = hf_hub_download(
+                    repo_id=location,
+                    filename="weights.pth",
+                    local_files_only=bool(local_files_only),
+                )
                 print(f"[codec] dacvae: hf://{repo_id} -> {location}", flush=True)
             except Exception:
+                if local_files_only:
+                    raise
                 # Let DACVAE.load surface a clearer error if this is not a valid path/repo.
                 pass
 

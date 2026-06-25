@@ -270,6 +270,33 @@ uv run --no-sync python infer.py \
 
 ### Additional Inference Notes
 
+#### Offline inference with Hugging Face checkpoints
+
+Use `--local-files-only` when running without network access:
+
+```bash
+uv run --no-sync python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-500M-v3 \
+  --local-files-only \
+  --text "こんにちは、私はAIです。これは音声合成のテストです。" \
+  --ref-wav path/to/reference.wav \
+  --output-wav outputs/sample.wav
+```
+
+Setting `HF_HUB_OFFLINE=1` also enables local-only Hugging Face file resolution
+for CLI and Gradio inference.
+
+Before going offline, make sure the Hugging Face cache already contains every
+repo used by the selected checkpoint: the checkpoint repo, the configured codec
+repo, and the text tokenizer repo referenced by the checkpoint metadata.
+
+For the current released v3 checkpoints, that includes the
+`Aratako/Semantic-DACVAE-Japanese-32dim` codec and the
+`llm-jp/llm-jp-3-150m` tokenizer.
+
+If a fully offline run still fails, one of those transitive repos is probably
+missing from the local cache.
+
 For tuning guidance and detailed explanations of inference options, see the
 [Parameter Guide](docs/parameters.md).
 
