@@ -891,49 +891,9 @@ def build_ui() -> gr.Blocks:
             "空欄なら no-reference モードで推論します。"
         )
 
-        # --- モデル設定行 ---
-        with gr.Row():
-            checkpoint = gr.Dropdown(
-                label="Checkpoint (.pt/.safetensors or HF repo id)",
-                choices=_checkpoint_choices(),
-                value=saved_checkpoint,
-                allow_custom_value=True,
-                scale=4,
-            )
-            model_device = gr.Dropdown(
-                label="Model Device",
-                choices=device_choices,
-                value=saved_model_device,
-                scale=1,
-            )
-            model_precision = gr.Dropdown(
-                label="Model Precision",
-                choices=model_precision_choices,
-                value=last_settings.get("model_precision", model_precision_choices[0]),
-                scale=1,
-            )
-            codec_device = gr.Dropdown(
-                label="Codec Device",
-                choices=device_choices,
-                value=saved_codec_device,
-                scale=1,
-            )
-            codec_precision = gr.Dropdown(
-                label="Codec Precision",
-                choices=codec_precision_choices,
-                value=last_settings.get("codec_precision", codec_precision_choices[0]),
-                scale=1,
-            )
-            # ウォーターマークは常にOFF（gr.State で非表示管理）
-            enable_watermark = gr.State(False)
-
-        # --- モデル読み込み/解放ボタン ---
-        with gr.Row():
-            load_model_btn = gr.Button("Load Model")
-            clear_cache_btn = gr.Button("Unload Model")
-            clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
-
-        # --- テキスト入力 ---
+        # -------------------------------------------------------------------
+        # 1. テキスト入力 & 絵文字パレット（最頻出UI）
+        # -------------------------------------------------------------------
         text = gr.Textbox(label="Text", lines=4, value=last_settings.get("text", ""))
 
         # Why: ユーザーが特定の感情表現や音響効果（囁き、笑いなど）を表す絵文字を
@@ -941,7 +901,40 @@ def build_ui() -> gr.Blocks:
         #      テキスト入力エリアの直下に絵文字パレットを配置する。初期状態は閉じた状態(open=False)とする。
         build_emoji_palette(text, open=False)
 
-        # --- 参照音声 / Speaker Embedding 入力欄 ---
+        # -------------------------------------------------------------------
+        # 2. 生成制御（ボタン類 & 稼働中スピナー）
+        # -------------------------------------------------------------------
+        # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
+        #      ボタン3つで制御する。旧 Forever チェックボックス + Stop ボタンを廃止。
+        #      Generate Forever 中はスピナーアイコンを表示して稼働中であることを示す。
+        with gr.Row():
+            generate_btn = gr.Button("Generate", variant="primary", scale=3)
+            generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
+            # autoplay: 最新の1件を自動再生するかの切り替え
+            autoplay = gr.Checkbox(
+                label="Autoplay", value=last_settings.get("autoplay", True), scale=1
+            )
+            # Live Update: Generate Forever 中にプロンプトの変更を反映するかどうか
+            # Why: デフォルト OFF にすることで、意図しないプロンプト変更が
+            #      連続生成に影響しないようにする。ON にすると、text の
+            #      変更が次のイテレーションから反映される。
+            live_update = gr.Checkbox(
+                label="Live Update", value=False, scale=1
+            )
+            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
+
+        # --- Generate Forever 稼働中のスピナー表示 ---
+        # Why: Generate Forever が動いていることを視覚的に分かりやすくするため、
+        #      生成ボタンの近くにアニメーション付きスピナーを配置する。
+        #      初期状態では非表示で、Generate Forever 開始時に visible=True にする。
+        forever_spinner = gr.HTML(
+            value=_FOREVER_SPINNER_HTML,
+            visible=False,
+        )
+
+        # -------------------------------------------------------------------
+        # 3. 参照音声 / Speaker Embedding 入力欄 & ハンドラー定義
+        # -------------------------------------------------------------------
         # Why: 参照音声アップロードと Speaker Embedding は排他仕様（どちらか一方のみ指定）である。
         #      左右の Column に並べて表示することで、ユーザーがそれぞれの状態を視覚的に
         #      比較・確認しやすくする。
@@ -1014,7 +1007,75 @@ def build_ui() -> gr.Blocks:
             inputs=[],
             outputs=[uploaded_audio, ref_filename_display, uploaded_audio_player]
         )
-        # --- サンプリング設定 ---
+
+        # -------------------------------------------------------------------
+        # 4. キュー再生プレイヤー & 直近の生成結果
+        # -------------------------------------------------------------------
+        # --- キュー用 UI ---
+        # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
+        #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
+        gr.HTML("""
+        <div id="queue-player-container" style="display:none; padding: 10px; background: var(--background-fill-secondary, #f9fafb); border-radius: 8px; border: 1px solid var(--border-color-primary, #e5e7eb); margin-bottom: 15px;">
+            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151); display: flex; justify-content: space-between; align-items: center;">
+                <div>▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span></div>
+                <button onclick="if(window.clearQueue) window.clearQueue()" style="font-size:12px; padding: 4px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">全削除</button>
+            </div>
+            <div id="current-playing-info" style="font-size:13px; margin-bottom:8px; display:none; padding: 6px; background-color: var(--background-fill-primary, #ffffff); border-radius: 4px; border-left: 4px solid #7c3aed;">
+                <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span>
+                <span id="current-playing-name" style="font-weight:bold; color: var(--body-text-color, #374151); word-break: break-all; margin-left: 4px;"></span>
+            </div>
+            <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;"
+                onended="if(window.playNextInQueue) window.playNextInQueue()"
+                onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
+                onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
+            ></audio>
+            <div id="queue-list-container" style="display:none; max-height: 180px; overflow-y: auto; background: var(--background-fill-primary, #ffffff); border: 1px solid var(--border-color-primary, #d1d5db); border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);">
+                <ul id="queue-list" style="list-style: none; padding: 0; margin: 0; font-size: 13px; color: var(--body-text-color, #374151);"></ul>
+            </div>
+        </div>
+        """)
+
+        # --- キュー処理用隠し File ---
+        # 生成完了のたびにこのコンポーネントに音声パスが渡され、JS(enqueueAudio)にURL(Token付)が発火する
+        queue_new_item = gr.File(visible=False, elem_id="queue-new-item")
+        queue_new_item.change(
+            fn=None,
+            inputs=[queue_new_item],
+            js="""
+            function(fileObj) {
+                if (fileObj && fileObj.url && typeof window.enqueueAudio === 'function') {
+                    window.enqueueAudio(fileObj.url);
+                }
+            }
+            """,
+        )
+
+        # --- 直近5件の履歴表示 ---
+        # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
+        #      最新が上に来るため、生成のたびに新しい音声がすぐ確認できる。
+        gr.Markdown("### 直近の生成結果")
+        # gr.State: Gradio のセッション内でデータを保持する仕組み
+        # ここでは直近5件の wav ファイルパスを配列で管理する
+        history_state = gr.State(value=[])
+
+        out_audios: list[gr.Audio] = []
+        for i in range(_MAX_HISTORY):
+            # elem_id: カスタム JS から DOM 要素を特定するために使用
+            # 最新の1件 (i=0) は "audio-0" という ID を付与し、
+            # JS のキュー再生ロジックがこの要素を監視する
+            out_audios.append(
+                gr.Audio(
+                    label=f"#{i + 1}",
+                    type="filepath",
+                    interactive=False,
+                    visible=(False),  # 初期状態では非表示（生成後に表示される）
+                    elem_id=f"audio-{i}",
+                )
+            )
+
+        # -------------------------------------------------------------------
+        # 5. サンプリング設定（アコーディオン）
+        # -------------------------------------------------------------------
         # Why: num_candidates は常に1なのでスライダーを削除
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
@@ -1080,7 +1141,9 @@ def build_ui() -> gr.Blocks:
                     step=0.1,
                 )
 
-        # --- Advanced 設定 ---
+        # -------------------------------------------------------------------
+        # 6. 詳細設定（初期状態で閉じたアコーディオン）
+        # -------------------------------------------------------------------
         # Why: 参照音声版には speaker_kv_* パラメータがある一方、
         #      max_text_len / max_caption_len はない。
         with gr.Accordion("Advanced (Optional)", open=False):
@@ -1130,34 +1193,57 @@ def build_ui() -> gr.Blocks:
                 value=last_settings.get("lora_adapter_raw", ""),
             )
 
-        # --- 生成制御 ---
-        # Why: EasyReforge 風に Generate / Generate Forever / Cancel Forever の
-        #      ボタン3つで制御する。旧 Forever チェックボックス + Stop ボタンを廃止。
-        #      Generate Forever 中はスピナーアイコンを表示して稼働中であることを示す。
+        # -------------------------------------------------------------------
+        # 7. モデル設定行（めったに変更しない）
+        # -------------------------------------------------------------------
         with gr.Row():
-            generate_btn = gr.Button("Generate", variant="primary", scale=3)
-            generate_forever_btn = gr.Button("Generate Forever", variant="secondary", scale=2)
-            # autoplay: 最新の1件を自動再生するかの切り替え
-            autoplay = gr.Checkbox(
-                label="Autoplay", value=last_settings.get("autoplay", True), scale=1
+            checkpoint = gr.Dropdown(
+                label="Checkpoint (.pt/.safetensors or HF repo id)",
+                choices=_checkpoint_choices(),
+                value=saved_checkpoint,
+                allow_custom_value=True,
+                scale=4,
             )
-            # Live Update: Generate Forever 中にプロンプトの変更を反映するかどうか
-            # Why: デフォルト OFF にすることで、意図しないプロンプト変更が
-            #      連続生成に影響しないようにする。ON にすると、text の
-            #      変更が次のイテレーションから反映される。
-            live_update = gr.Checkbox(
-                label="Live Update", value=False, scale=1
+            model_device = gr.Dropdown(
+                label="Model Device",
+                choices=device_choices,
+                value=saved_model_device,
+                scale=1,
             )
-            cancel_forever_btn = gr.Button("Cancel Forever", variant="stop", scale=1)
+            model_precision = gr.Dropdown(
+                label="Model Precision",
+                choices=model_precision_choices,
+                value=last_settings.get("model_precision", model_precision_choices[0]),
+                scale=1,
+            )
+            codec_device = gr.Dropdown(
+                label="Codec Device",
+                choices=device_choices,
+                value=saved_codec_device,
+                scale=1,
+            )
+            codec_precision = gr.Dropdown(
+                label="Codec Precision",
+                choices=codec_precision_choices,
+                value=last_settings.get("codec_precision", codec_precision_choices[0]),
+                scale=1,
+            )
+            # ウォーターマークは常にOFF（gr.State で非表示管理）
+            enable_watermark = gr.State(False)
 
-        # --- Generate Forever 稼働中のスピナー表示 ---
-        # Why: Generate Forever が動いていることを視覚的に分かりやすくするため、
-        #      生成ボタンの近くにアニメーション付きスピナーを配置する。
-        #      初期状態では非表示で、Generate Forever 開始時に visible=True にする。
-        forever_spinner = gr.HTML(
-            value=_FOREVER_SPINNER_HTML,
-            visible=False,
-        )
+        # -------------------------------------------------------------------
+        # 8. モデル読み込み/解放ボタン（めったに変更しない）
+        # -------------------------------------------------------------------
+        with gr.Row():
+            load_model_btn = gr.Button("Load Model")
+            clear_cache_btn = gr.Button("Unload Model")
+            clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
+
+        # -------------------------------------------------------------------
+        # 9. 実行ログとタイミング情報
+        # -------------------------------------------------------------------
+        out_log = gr.Textbox(label="Run Log", lines=6)
+        out_timing = gr.Textbox(label="Timing", lines=6)
 
         # --- forever フラグ用の固定値 State ---
         # Why: Generate ボタンと Generate Forever ボタンで同じ _run_generation 関数を
@@ -1166,72 +1252,6 @@ def build_ui() -> gr.Blocks:
         #      Generate Forever ボタン → forever=True（連続生成）
         forever_false = gr.State(False)
         forever_true = gr.State(True)
-
-        # --- キュー用 UI ---
-        # Why: 独立した再生プレイヤーでキューを管理するため、コンテナごと表示する。
-        #      直近の生成結果より上に配置することで、ユーザーの目に留まりやすくする。
-        gr.HTML("""
-        <div id="queue-player-container" style="display:none; padding: 10px; background: var(--background-fill-secondary, #f9fafb); border-radius: 8px; border: 1px solid var(--border-color-primary, #e5e7eb); margin-bottom: 15px;">
-            <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color: var(--body-text-color, #374151); display: flex; justify-content: space-between; align-items: center;">
-                <div>▶️ 連続再生プレイヤー <span id="queue-count-badge" style="background:#7c3aed; color:white; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:5px; display:none;">0</span></div>
-                <button onclick="if(window.clearQueue) window.clearQueue()" style="font-size:12px; padding: 4px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">全削除</button>
-            </div>
-            <div id="current-playing-info" style="font-size:13px; margin-bottom:8px; display:none; padding: 6px; background-color: var(--background-fill-primary, #ffffff); border-radius: 4px; border-left: 4px solid #7c3aed;">
-                <span style="color: var(--body-text-color-sub, #6b7280);">現在再生中:</span>
-                <span id="current-playing-name" style="font-weight:bold; color: var(--body-text-color, #374151); word-break: break-all; margin-left: 4px;"></span>
-            </div>
-            <audio id="queue-audio" controls style="width: 100%; margin-bottom: 10px;"
-                onended="if(window.playNextInQueue) window.playNextInQueue()"
-                onplay="window._isQueuePlaying = true; window._queueForcePaused = false; if(window.updateQueueUI) window.updateQueueUI()"
-                onpause="if(!this.ended){ window._queueForcePaused = true; window._isQueuePlaying = false; if(window.updateQueueUI) window.updateQueueUI(); }"
-            ></audio>
-            <div id="queue-list-container" style="display:none; max-height: 180px; overflow-y: auto; background: var(--background-fill-primary, #ffffff); border: 1px solid var(--border-color-primary, #d1d5db); border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);">
-                <ul id="queue-list" style="list-style: none; padding: 0; margin: 0; font-size: 13px; color: var(--body-text-color, #374151);"></ul>
-            </div>
-        </div>
-        """)
-
-        # --- キュー処理用隠し File ---
-        # 生成完了のたびにこのコンポーネントに音声パスが渡され、JS(enqueueAudio)にURL(Token付)が発火する
-        queue_new_item = gr.File(visible=False, elem_id="queue-new-item")
-        queue_new_item.change(
-            fn=None,
-            inputs=[queue_new_item],
-            js="""
-            function(fileObj) {
-                if (fileObj && fileObj.url && typeof window.enqueueAudio === 'function') {
-                    window.enqueueAudio(fileObj.url);
-                }
-            }
-            """,
-        )
-
-        # --- 直近5件の履歴表示 ---
-        # Why: 候補グリッド（32枠）を廃止し、直近5件の生成結果を縦に並べて表示する。
-        #      最新が上に来るため、生成のたびに新しい音声がすぐ確認できる。
-        gr.Markdown("### 直近の生成結果")
-        # gr.State: Gradio のセッション内でデータを保持する仕組み
-        # ここでは直近5件の wav ファイルパスを配列で管理する
-        history_state = gr.State(value=[])
-
-        out_audios: list[gr.Audio] = []
-        for i in range(_MAX_HISTORY):
-            # elem_id: カスタム JS から DOM 要素を特定するために使用
-            # 最新の1件 (i=0) は "audio-0" という ID を付与し、
-            # JS のキュー再生ロジックがこの要素を監視する
-            out_audios.append(
-                gr.Audio(
-                    label=f"#{i + 1}",
-                    type="filepath",
-                    interactive=False,
-                    visible=(False),  # 初期状態では非表示（生成後に表示される）
-                    elem_id=f"audio-{i}",
-                )
-            )
-
-        # --- ログ出力 ---
-        out_log = gr.Textbox(label="Run Log", lines=6)
-        out_timing = gr.Textbox(label="Timing", lines=6)
 
         # --- 共通の入力リスト ---
         # Why: Generate ボタンと Generate Forever ボタンで共通する入力パラメータを
@@ -1245,7 +1265,7 @@ def build_ui() -> gr.Blocks:
                 forever_state: gr.State(False) または gr.State(True)
 
             Returns:
-                list: _run_generation に渡す入力コンポーネントのリスト
+                list: _run_generation に渡す入力コンポーネント of リスト
             """
             return [
                 checkpoint,
