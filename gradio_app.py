@@ -410,6 +410,17 @@ def _clear_runtime_cache() -> str:
 
 
 def build_ui() -> gr.Blocks:
+    """
+    Irodori-TTS の推論用 Web UI を構築する。
+
+    戻り値:
+        gr.Blocks: Gradio の Blocks オブジェクト。
+
+    Why:
+        ユーザーの利便性を最優先し、頻繁に操作する「Text入力」「絵文字パレット」「Generateボタン」
+        「Reference Audio（参照音声）」を最上部に配置し、あまり変更しない「Samplingパラメータ」や
+        「モデルのロード/選択」などの設定類を下部に配置するレイアウトにしています。
+    """
     default_checkpoint = _default_checkpoint()
     default_model_device = _default_model_device()
     default_codec_device = _default_codec_device()
@@ -423,44 +434,9 @@ def build_ui() -> gr.Blocks:
             "When settings are unchanged, runtime is reused and only sampling/decoding runs."
         )
 
-        with gr.Row():
-            checkpoint = gr.Dropdown(
-                label="Checkpoint (.pt/.safetensors or HF repo id)",
-                choices=_checkpoint_choices(),
-                value=default_checkpoint,
-                allow_custom_value=True,
-                scale=4,
-            )
-            model_device = gr.Dropdown(
-                label="Model Device",
-                choices=device_choices,
-                value=default_model_device,
-                scale=1,
-            )
-            model_precision = gr.Dropdown(
-                label="Model Precision",
-                choices=model_precision_choices,
-                value=model_precision_choices[0],
-                scale=1,
-            )
-            codec_device = gr.Dropdown(
-                label="Codec Device",
-                choices=device_choices,
-                value=default_codec_device,
-                scale=1,
-            )
-            codec_precision = gr.Dropdown(
-                label="Codec Precision",
-                choices=codec_precision_choices,
-                value=codec_precision_choices[0],
-                scale=1,
-            )
-
-        with gr.Row():
-            load_model_btn = gr.Button("Load Model")
-            clear_cache_btn = gr.Button("Unload Model")
-            clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
-
+        # -------------------------------------------------------------------
+        # 1. テキスト入力 & 絵文字パレット（最頻出UI）
+        # -------------------------------------------------------------------
         with gr.Column():
             text = gr.Textbox(
                 label="Text",
@@ -468,6 +444,15 @@ def build_ui() -> gr.Blocks:
                 elem_id="irodori-text-input",
             )
             build_emoji_palette(text, open=False)
+
+        # -------------------------------------------------------------------
+        # 2. 生成ボタン（操作の起点）
+        # -------------------------------------------------------------------
+        generate_btn = gr.Button("Generate", variant="primary")
+
+        # -------------------------------------------------------------------
+        # 3. 参照音声入力（モデルの音声特徴を指定する）
+        # -------------------------------------------------------------------
         with gr.Tabs():
             with gr.Tab("Reference Audio"):
                 uploaded_audio = gr.Audio(
@@ -488,6 +473,33 @@ def build_ui() -> gr.Blocks:
                         scale=1,
                     )
 
+        # -------------------------------------------------------------------
+        # 4. 生成結果オーディオ出力
+        # -------------------------------------------------------------------
+        out_audios: list[gr.Audio] = []
+        num_rows = (
+            MAX_GRADIO_CANDIDATES + GRADIO_AUDIO_COLS_PER_ROW - 1
+        ) // GRADIO_AUDIO_COLS_PER_ROW
+        with gr.Column():
+            for row_idx in range(num_rows):
+                with gr.Row():
+                    for col_idx in range(GRADIO_AUDIO_COLS_PER_ROW):
+                        i = row_idx * GRADIO_AUDIO_COLS_PER_ROW + col_idx
+                        if i >= MAX_GRADIO_CANDIDATES:
+                            break
+                        out_audios.append(
+                            gr.Audio(
+                                label=f"Generated Audio {i + 1}",
+                                type="filepath",
+                                interactive=False,
+                                visible=(i == 0),
+                                min_width=160,
+                            )
+                        )
+
+        # -------------------------------------------------------------------
+        # 5. サンプリング設定（アコーディオン）
+        # -------------------------------------------------------------------
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
                 num_steps = gr.Slider(label="Num Steps", minimum=1, maximum=120, value=40, step=1)
@@ -544,6 +556,9 @@ def build_ui() -> gr.Blocks:
                     step=0.1,
                 )
 
+        # -------------------------------------------------------------------
+        # 6. 詳細設定（初期状態で閉じたアコーディオン）
+        # -------------------------------------------------------------------
         with gr.Accordion("Advanced (Optional)", open=False):
             cfg_scale_raw = gr.Textbox(label="CFG Scale Override (optional)", value="")
             with gr.Row():
@@ -562,31 +577,59 @@ def build_ui() -> gr.Blocks:
                 )
             lora_adapter_raw = gr.Textbox(label="LoRA Adapter Directory (optional)", value="")
 
-        generate_btn = gr.Button("Generate", variant="primary")
+        # -------------------------------------------------------------------
+        # 7. モデル設定・デバイス（めったに変更しない）
+        # -------------------------------------------------------------------
+        with gr.Row():
+            checkpoint = gr.Dropdown(
+                label="Checkpoint (.pt/.safetensors or HF repo id)",
+                choices=_checkpoint_choices(),
+                value=default_checkpoint,
+                allow_custom_value=True,
+                scale=4,
+            )
+            model_device = gr.Dropdown(
+                label="Model Device",
+                choices=device_choices,
+                value=default_model_device,
+                scale=1,
+            )
+            model_precision = gr.Dropdown(
+                label="Model Precision",
+                choices=model_precision_choices,
+                value=model_precision_choices[0],
+                scale=1,
+            )
+            codec_device = gr.Dropdown(
+                label="Codec Device",
+                choices=device_choices,
+                value=default_codec_device,
+                scale=1,
+            )
+            codec_precision = gr.Dropdown(
+                label="Codec Precision",
+                choices=codec_precision_choices,
+                value=codec_precision_choices[0],
+                scale=1,
+            )
 
-        out_audios: list[gr.Audio] = []
-        num_rows = (
-            MAX_GRADIO_CANDIDATES + GRADIO_AUDIO_COLS_PER_ROW - 1
-        ) // GRADIO_AUDIO_COLS_PER_ROW
-        with gr.Column():
-            for row_idx in range(num_rows):
-                with gr.Row():
-                    for col_idx in range(GRADIO_AUDIO_COLS_PER_ROW):
-                        i = row_idx * GRADIO_AUDIO_COLS_PER_ROW + col_idx
-                        if i >= MAX_GRADIO_CANDIDATES:
-                            break
-                        out_audios.append(
-                            gr.Audio(
-                                label=f"Generated Audio {i + 1}",
-                                type="filepath",
-                                interactive=False,
-                                visible=(i == 0),
-                                min_width=160,
-                            )
-                        )
+        # -------------------------------------------------------------------
+        # 8. モデルのロード/アンロード管理
+        # -------------------------------------------------------------------
+        with gr.Row():
+            load_model_btn = gr.Button("Load Model")
+            clear_cache_btn = gr.Button("Unload Model")
+            clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
+
+        # -------------------------------------------------------------------
+        # 9. 実行ログとタイミング情報
+        # -------------------------------------------------------------------
         out_log = gr.Textbox(label="Run Log", lines=8)
         out_timing = gr.Textbox(label="Timing", lines=8)
 
+        # -------------------------------------------------------------------
+        # イベントハンドラー（UIの順番が変更されても、すべて最後に関連付けを行う）
+        # -------------------------------------------------------------------
         generate_btn.click(
             _run_generation,
             inputs=[
