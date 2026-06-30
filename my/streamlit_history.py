@@ -178,39 +178,58 @@ init_db()
 
 st.sidebar.title("🔍 フィルター")
 
-# UI操作のたびにDBアクセス・再描画が走るのを防ぐため、フォーム化する
-with st.sidebar.form("filter_form"):
-    # キーワード検索
-    # text / caption のどちらかに部分一致すれば表示する
-    keyword = st.text_input(
-        "キーワード検索",
-        value="",
-        placeholder="text / caption で検索...",
-        help="生成テキストまたはキャプション(スタイルプロンプト)を部分一致で検索します。",
-    )
+# Why: 
+#   以前は、チェックボックスやお気に入り、ソート順などのUI操作のたびに
+#   DBアクセスや画面の再描画（Streamlitの再実行）が走るのを防ぐために、
+#   st.sidebar.form を使用して「適用する」ボタンが押されるまで実行を保留していました。
+#   しかし、これによって「キーワード検索のテキストボックスでEnterキーを押しても、
+#   明示的に適用ボタンをクリックするまで検索が反映されない」という不便な挙動になっていました。
+#   SQLiteへのDBアクセスは非常に高速（ミリ秒単位で完了）であり、リアクティブな操作性の方が
+#   利便性が高いため、フォーム（st.sidebar.form）を廃止し、Enterキーの押下やチェックボックス等の
+#   変更によって即座に検索が適用されるように変更しました。
+#   これにより、テキストボックスにキーワードを入力してEnterを押すだけで検索が実行されます。
 
-    # お気に入りのみ表示
-    favorite_only = st.checkbox(
-        "⭐ お気に入りのみ表示",
-        value=False,
-    )
+# キーワード検索
+# text / caption のどちらかに部分一致すれば表示する
+keyword = st.sidebar.text_input(
+    "キーワード検索",
+    value="",
+    placeholder="text / caption で検索...",
+    help="生成テキストまたはキャプション(スタイルプロンプト)を部分一致で検索します。",
+)
 
-    # ソート順
-    sort_label = st.selectbox(
-        "📊 ソート順",
-        options=list(_SORT_OPTIONS.keys()),
-        index=0,  # デフォルト: 新しい順
-    )
+# お気に入りのみ表示
+favorite_only = st.sidebar.checkbox(
+    "⭐ お気に入りのみ表示",
+    value=False,
+)
 
-    # 適用ボタン
-    submitted = st.form_submit_button("適用する")
+# ソート順
+sort_label = st.sidebar.selectbox(
+    "📊 ソート順",
+    options=list(_SORT_OPTIONS.keys()),
+    index=0,  # デフォルト: 新しい順
+)
 
 # 表示ラベルからDB側のキーに変換
 sort_key = _SORT_OPTIONS[sort_label]
 
-# フィルターが適用されたら、表示件数を初期値に戻す
-if submitted:
+# フィルターのいずれかの状態（キーワード、お気に入り、ソート順）が変更された場合、
+# 表示上限数（display_limit）を初期値（50）に戻すためのリセット処理を行います。
+#
+# Why:
+#   「もっと読み込む」ボタン等をクリックして display_limit が100や150に増えている状態で、
+#   ユーザーが別の検索条件を入力した場合、新しい検索条件に適合する上位50件から表示するのが自然だからです。
+#   Streamlitは状態が変化するとスクリプトを最初から再実行する仕組みのため、
+#   現在のフィルター値と前回のフィルター値を st.session_state（セッション情報を保持する仕組み）に
+#   保存して比較し、差分があれば display_limit をリセットします。
+filter_state = (keyword, favorite_only, sort_key)
+if "prev_filter_state" not in st.session_state:
+    st.session_state["prev_filter_state"] = filter_state
+
+if st.session_state["prev_filter_state"] != filter_state:
     st.session_state["display_limit"] = 50
+    st.session_state["prev_filter_state"] = filter_state
 
 st.sidebar.markdown("---")
 st.sidebar.caption("🔧 更新設定")
