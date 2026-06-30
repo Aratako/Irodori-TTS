@@ -158,7 +158,48 @@ st.markdown(
         border-top: 1px solid rgba(128, 128, 128, 0.15);
         margin: 0.8rem 0;
     }
+
+    /* フローティング上に戻るボタン
+       Why: 生成履歴はレコード数（最大50件以上）が多く縦に長いページになるため、
+            どのスクロール位置からでもワンクリックで最上部に戻れるようにする。
+            Streamlitのiframe環境やスクロールコンテナが異なる場合を考慮し、
+            window自体と.mainコンテナの双方に対してスムーズスクロールを行う。 */
+    .scroll-to-top-btn {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+        color: white;
+        font-size: 20px;
+        border: none;
+        outline: none;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+    .scroll-to-top-btn:hover {
+        transform: translateY(-5px) scale(1.05);
+        box-shadow: 0 6px 20px rgba(238, 90, 36, 0.4);
+        background: linear-gradient(135deg, #ee5a24, #ff6b6b);
+    }
+    .scroll-to-top-btn:active {
+        transform: translateY(-2px) scale(0.98);
+    }
     </style>
+
+    <!-- 上に戻るボタンHTML
+         Why: スクリプトの再実行（rerun）のたびに複雑なJSイベントリスナーを登録するのを防ぎ、
+              シンプルかつ堅牢に動作させるため、インラインのonclick属性でスクロールを実行する。 -->
+    <button onclick="window.scrollTo({top: 0, behavior: 'smooth'}); const main = document.querySelector('.main'); if(main){main.scrollTo({top: 0, behavior: 'smooth'});}" class="scroll-to-top-btn" title="上に戻る">
+        ▲
+    </button>
     """,
     unsafe_allow_html=True,
 )
