@@ -196,12 +196,48 @@ st.markdown(
 
     <!-- 上に戻るボタンHTML
          Why: スクリプトの再実行（rerun）のたびに複雑なJSイベントリスナーを登録するのを防ぎ、
-              シンプルかつ堅牢に動作させるため、インラインのonclick属性でスクロールを実行する。 -->
-    <button onclick="window.scrollTo({top: 0, behavior: 'smooth'}); const main = document.querySelector('.main'); if(main){main.scrollTo({top: 0, behavior: 'smooth'});}" class="scroll-to-top-btn" title="上に戻る">
+              シンプルかつ堅牢に動作させる。以前はインラインのonclick属性を使用していたが、
+              Reactのハイドレーションやレンダラーの仕様により文字列のonclickがReactError #231を
+              引き起こして無効化される不具合が生じたため、idを付与して外部JSからバインドする方式に変更。 -->
+    <button id="scrollToTopBtn" class="scroll-to-top-btn" title="上に戻る">
         ▲
     </button>
     """,
     unsafe_allow_html=True,
+)
+
+# 上に戻るボタンにクリックイベントを設定するJavaScriptを注入
+# Why: 
+#   st.markdown(unsafe_allow_html=True) 内でインラインの onclick 属性を使用すると、
+#   Streamlit (React) が onClick リスナーに関数ではなく文字列が渡されたと認識し、
+#   React Error #231 を発生させてイベントが無効化される。
+#   この問題を回避するため、st.components.v1.html を使用して iframe 内でスクリプトを実行し、
+#   親ウィンドウ(window.parent)のボタン要素に対して安全にクリックイベントをアタッチする。
+#   また、Streamlitのレンダリング遅延に対応するため setTimeout で実行タイミングをわずかに遅らせる。
+st.components.v1.html(
+    """
+    <script>
+    function setupScrollToTop() {
+        const parentDoc = window.parent.document;
+        const btn = parentDoc.getElementById('scrollToTopBtn');
+        if (btn) {
+            btn.onclick = function() {
+                // メインのスクロールコンテナを取得してスムーズにスクロール
+                const main = parentDoc.querySelector('.main');
+                if (main) {
+                    main.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+                // フォールバックとして window もスクロール
+                window.parent.scrollTo({ top: 0, behavior: 'smooth' });
+            };
+        }
+    }
+    // レンダリングタイミングを考慮して100ms後に実行する
+    setTimeout(setupScrollToTop, 100);
+    </script>
+    """,
+    height=0,
+    width=0,
 )
 
 
