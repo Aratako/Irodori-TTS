@@ -600,6 +600,10 @@ def _run_generation(
 
         iteration += 1
 
+        # Why: キャッシュされた推論用ランタイムを取得し、モデルの再ロード要否を確認する。
+        #      毎ループ実行することで、ユーザーが設定を変更した場合やリロードに対応する。
+        runtime, reloaded = get_cached_runtime(runtime_key)
+
         stdout_log(
             f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})"
         )
