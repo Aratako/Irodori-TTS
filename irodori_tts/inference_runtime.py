@@ -40,6 +40,13 @@ def _is_mps_available() -> bool:
     return bool(torch.backends.mps.is_available())
 
 
+def _is_xpu_available() -> bool:
+    try:
+        return bool(torch.xpu.is_available())
+    except AttributeError:
+        return False
+
+
 def resolve_runtime_device(device: str | torch.device) -> torch.device:
     resolved = torch.device(device)
     if resolved.type == "cpu":
@@ -54,7 +61,13 @@ def resolve_runtime_device(device: str | torch.device) -> torch.device:
         if not _is_mps_available():
             raise ValueError("MPS device requested but torch.backends.mps.is_available() is False.")
         return torch.device("mps")
-    raise ValueError(f"Unsupported inference device={resolved!s}. Expected one of: cpu, cuda, mps.")
+    if resolved.type == "xpu":
+        if resolved.index is not None:
+            raise ValueError("XPU device index is not supported. Use 'xpu'.")
+        if not _is_xpu_available():
+            raise ValueError("XPU device requested but torch.xpu.is_available() is False.")
+        return torch.device("xpu")
+    raise ValueError(f"Unsupported inference device={resolved!s}. Expected one of: cpu, cuda, mps, xpu.")
 
 
 def list_available_runtime_devices() -> list[str]:
@@ -63,6 +76,8 @@ def list_available_runtime_devices() -> list[str]:
         devices.append("cuda")
     if _is_mps_available():
         devices.append("mps")
+    if _is_xpu_available():
+        devices.append("xpu")
     devices.append("cpu")
     return devices
 
@@ -73,7 +88,7 @@ def default_runtime_device() -> str:
 
 def list_available_runtime_precisions(device: str | torch.device) -> list[str]:
     resolved = resolve_runtime_device(device)
-    if resolved.type == "cuda":
+    if resolved.type in ("cuda", "xpu"):
         return ["fp32", "bf16"]
     return ["fp32"]
 
@@ -85,6 +100,10 @@ def _sync_device(device: torch.device) -> None:
         mps = getattr(torch, "mps", None)
         if mps is not None and hasattr(mps, "synchronize"):
             mps.synchronize()
+    elif device.type == "xpu":
+        xpu = getattr(torch, "xpu", None)
+        if xpu is not None and hasattr(xpu, "synchronize"):
+            xpu.synchronize()
 
 
 def _sync_devices(*devices: torch.device) -> None:
@@ -276,8 +295,8 @@ def resolve_runtime_dtype(*, precision: str, device: torch.device) -> torch.dtyp
     if mode == "fp32":
         return torch.float32
     if mode == "bf16":
-        if device.type != "cuda":
-            raise ValueError("precision='bf16' currently requires CUDA device.")
+        if device.type not in ("cuda", "xpu"):
+            raise ValueError("precision='bf16' currently requires CUDA or XPU device.")
         return torch.bfloat16
     raise ValueError(f"Unsupported precision={precision!r}. Expected one of: fp32, bf16.")
 
@@ -305,7 +324,8 @@ def resolve_cfg_scales(
     if not use_speaker_condition:
         if speaker_val > 0.0:
             messages.append(
-                "info: speaker conditioning is disabled for this checkpoint; ignoring cfg_scale_speaker."
+                "info: speaker conditioning is disabled for this checkpoint or request; "
+                "ignoring cfg_scale_speaker."
             )
         speaker_val = 0.0
 
@@ -654,7 +674,7 @@ class InferenceRuntime:
         messages: list[str],
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         runtime_dtype = next(self.model.parameters()).dtype
-        if not self.model_cfg.use_speaker_condition:
+        if not self.model_cfg.use_speaker_condition_resolved:
             if req.ref_wav is not None or req.ref_latent is not None:
                 messages.append(
                     "info: speaker conditioning is disabled for this checkpoint; ignoring reference input."
@@ -755,7 +775,7 @@ class InferenceRuntime:
     ]:
         if req.ref_embed is None:
             return None, None
-        if not self.model_cfg.use_speaker_condition:
+        if not self.model_cfg.use_speaker_condition_resolved:
             messages.append(
                 "info: speaker conditioning is disabled for this checkpoint; ignoring speaker embedding."
             )
@@ -874,10 +894,13 @@ class InferenceRuntime:
         speaker_kv_max_layers = (
             None if req.speaker_kv_max_layers is None else int(req.speaker_kv_max_layers)
         )
+        use_speaker_for_request = bool(
+            self.model_cfg.use_speaker_condition_resolved and not req.no_ref
+        )
         if speaker_kv_scale is not None:
-            if not self.model_cfg.use_speaker_condition:
+            if not use_speaker_for_request:
                 messages.append(
-                    "info: speaker conditioning is disabled for this checkpoint; ignoring speaker_kv_scale."
+                    "info: speaker conditioning is disabled for this request; ignoring speaker_kv_scale."
                 )
                 speaker_kv_scale = None
             else:
@@ -907,7 +930,7 @@ class InferenceRuntime:
             cfg_scale_speaker=req.cfg_scale_speaker,
             cfg_scale=req.cfg_scale,
             use_caption_condition=has_caption_text,
-            use_speaker_condition=self.model_cfg.use_speaker_condition,
+            use_speaker_condition=use_speaker_for_request,
         )
         messages.extend(scale_messages)
         for msg in scale_messages:
@@ -1007,7 +1030,7 @@ class InferenceRuntime:
                 )
                 if speaker_mask_override is not None:
                     has_speaker_duration = speaker_mask_override.any(dim=1)
-                elif self.model_cfg.use_speaker_condition and ref_mask is not None:
+                elif self.model_cfg.use_speaker_condition_resolved and ref_mask is not None:
                     has_speaker_duration = ref_mask.any(dim=1)
                 duration_features = build_duration_features(
                     [normalized_text] * num_candidates,
@@ -1038,8 +1061,18 @@ class InferenceRuntime:
                     text_mask=duration_text_mask,
                     speaker_state=duration_speaker_state,
                     speaker_mask=_duration_speaker_mask,
+                    caption_state=_duration_caption_state,
+                    caption_mask=_duration_caption_mask,
                     duration_features=duration_features,
                     has_speaker=has_speaker_duration,
+                    has_caption=torch.full(
+                        (num_candidates,),
+                        has_caption_text,
+                        dtype=torch.bool,
+                        device=self.model_device,
+                    )
+                    if self.model_cfg.use_caption_condition
+                    else None,
                 )
                 pred_frames = torch.expm1(pred_log_frames).float().mean().item()
                 scaled_frames = pred_frames * duration_scale
@@ -1207,6 +1240,10 @@ class InferenceRuntime:
                 mps = getattr(torch, "mps", None)
                 if mps is not None and hasattr(mps, "empty_cache"):
                     mps.empty_cache()
+            elif device.type == "xpu":
+                xpu = getattr(torch, "xpu", None)
+                if xpu is not None and hasattr(xpu, "empty_cache"):
+                    xpu.empty_cache()
 
 
 _RUNTIME_CACHE_LOCK = threading.Lock()

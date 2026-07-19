@@ -45,7 +45,7 @@ def _default_checkpoint() -> str:
         return str(preferred[-1])
     if candidates:
         return str(candidates[-1])
-    return "Aratako/Irodori-TTS-500M-v2-VoiceDesign"
+    return "Aratako/Irodori-TTS-600M-v3-VoiceDesign"
 
 
 def _checkpoint_choices() -> list[str]:
@@ -140,6 +140,12 @@ def _format_timings(stage_timings: list[tuple[str, float]], total_to_decode: flo
     return "\n".join(lines)
 
 
+def _resolve_ref_wav(uploaded_audio: str | None) -> str | None:
+    if uploaded_audio is not None and str(uploaded_audio).strip() != "":
+        return str(uploaded_audio)
+    return None
+
+
 def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     checkpoint = str(raw_checkpoint).strip()
     if checkpoint == "":
@@ -199,9 +205,9 @@ def _describe_runtime(
         notes.append(
             "warning: this checkpoint does not enable caption conditioning. Use gradio_app.py for reference-audio inference."
         )
-    if runtime.model_cfg.use_speaker_condition:
+    if runtime.model_cfg.use_speaker_condition_resolved:
         notes.append(
-            "info: this checkpoint still supports speaker conditioning, but this UI always runs without reference audio."
+            "info: this checkpoint supports speaker conditioning; provide reference audio or keep no-reference enabled."
         )
     return "\n".join(
         [
@@ -212,7 +218,7 @@ def _describe_runtime(
             f"codec_device: {runtime_key.codec_device}",
             f"codec_precision: {runtime_key.codec_precision}",
             f"use_caption_condition: {runtime.model_cfg.use_caption_condition}",
-            f"use_speaker_condition: {runtime.model_cfg.use_speaker_condition}",
+            f"use_speaker_condition: {runtime.model_cfg.use_speaker_condition_resolved}",
             *notes,
         ]
     )
@@ -226,6 +232,7 @@ def _run_generation(
     codec_precision: str,
     text: str,
     caption: str,
+    ref_wav: str | None,
     num_steps: int,
     num_candidates: int,
     seed_raw: str,
@@ -236,10 +243,12 @@ def _run_generation(
     cfg_guidance_mode: str,
     cfg_scale_text: float,
     cfg_scale_caption: float,
+    cfg_scale_speaker: float,
     cfg_scale_raw: str,
     cfg_min_t: float,
     cfg_max_t: float,
     context_kv_cache: bool,
+    speaker_kv_scale_raw: str,
     max_text_len_raw: str,
     max_caption_len_raw: str,
     truncation_factor_raw: str,
@@ -258,8 +267,8 @@ def _run_generation(
         codec_precision=codec_precision,
     )
 
-    text_value = str(text).strip()
-    caption_value = str(caption).strip()
+    text_value = "" if text is None else str(text).strip()
+    caption_value = "" if caption is None else str(caption).strip()
 
     if text_value == "":
         raise ValueError("text is required.")
@@ -276,6 +285,7 @@ def _run_generation(
     truncation_factor = _parse_optional_float(truncation_factor_raw, "truncation_factor")
     rescale_k = _parse_optional_float(rescale_k_raw, "rescale_k")
     rescale_sigma = _parse_optional_float(rescale_sigma_raw, "rescale_sigma")
+    speaker_kv_scale = _parse_optional_float(speaker_kv_scale_raw, "speaker_kv_scale")
     seed = _parse_optional_int(seed_raw, "seed")
     manual_seconds = _parse_optional_float(seconds_raw, "seconds")
     lora_adapter = _parse_optional_str(lora_adapter_raw)
@@ -285,6 +295,10 @@ def _run_generation(
         raise ValueError(
             "Loaded checkpoint does not enable caption conditioning. Use gradio_app.py for the original reference-audio model."
         )
+    ref_wav_path = _resolve_ref_wav(ref_wav)
+    effective_no_ref = ref_wav_path is None or not runtime.model_cfg.use_speaker_condition_resolved
+    if effective_no_ref:
+        ref_wav_path = None
 
     stdout_log(f"[gradio-caption] runtime: {'reloaded' if reloaded else 'reused'}")
     stdout_log(
@@ -307,9 +321,10 @@ def _run_generation(
         )
     )
     stdout_log(
-        "[gradio-caption] conditioning: text={} caption={}".format(
+        "[gradio-caption] conditioning: text={} caption={} speaker={}".format(
             "on" if text_value else "off",
             "on" if caption_value else "off (text-only)",
+            "off (no-ref)" if effective_no_ref else "on",
         )
     )
 
@@ -317,9 +332,9 @@ def _run_generation(
         SamplingRequest(
             text=text_value,
             caption=caption_value or None,
-            ref_wav=None,
+            ref_wav=ref_wav_path,
             ref_latent=None,
-            no_ref=True,
+            no_ref=effective_no_ref,
             ref_normalize_db=-16.0,
             ref_ensure_max=True,
             num_candidates=requested_candidates,
@@ -334,7 +349,7 @@ def _run_generation(
             cfg_guidance_mode=str(cfg_guidance_mode),
             cfg_scale_text=float(cfg_scale_text),
             cfg_scale_caption=float(cfg_scale_caption),
-            cfg_scale_speaker=0.0,
+            cfg_scale_speaker=0.0 if effective_no_ref else float(cfg_scale_speaker),
             cfg_scale=cfg_scale,
             cfg_min_t=float(cfg_min_t),
             cfg_max_t=float(cfg_max_t),
@@ -342,7 +357,7 @@ def _run_generation(
             rescale_k=rescale_k,
             rescale_sigma=rescale_sigma,
             context_kv_cache=bool(context_kv_cache),
-            speaker_kv_scale=None,
+            speaker_kv_scale=None if effective_no_ref else speaker_kv_scale,
             speaker_kv_min_t=None,
             speaker_kv_max_layers=None,
             t_schedule_mode=str(t_schedule_mode),
@@ -373,10 +388,6 @@ def _run_generation(
         *[f"saved[{i}]: {path}" for i, path in enumerate(out_paths, start=1)],
         *result.messages,
     ]
-    if runtime.model_cfg.use_speaker_condition:
-        detail_lines.append(
-            "info: speaker conditioning exists in this checkpoint, but this UI forced no-reference mode."
-        )
     detail_text = "\n".join(detail_lines)
     timing_text = _format_timings(result.stage_timings, result.total_to_decode)
     stdout_log(f"[gradio-caption] saved {len(out_paths)} candidates")
@@ -458,6 +469,10 @@ def build_ui() -> gr.Blocks:
             label="Caption / Style Prompt (optional)",
             lines=4,
         )
+        ref_wav = gr.Audio(
+            label="Reference Audio Upload (optional, blank = no-reference mode)",
+            type="filepath",
+        )
 
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
@@ -504,7 +519,7 @@ def build_ui() -> gr.Blocks:
                     label="CFG Scale Text",
                     minimum=0.0,
                     maximum=10.0,
-                    value=2.0,
+                    value=3.0,
                     step=0.1,
                 )
                 cfg_scale_caption = gr.Slider(
@@ -514,6 +529,13 @@ def build_ui() -> gr.Blocks:
                     value=4.0,
                     step=0.1,
                 )
+                cfg_scale_speaker = gr.Slider(
+                    label="CFG Scale Speaker",
+                    minimum=0.0,
+                    maximum=10.0,
+                    value=5.0,
+                    step=0.1,
+                )
 
         with gr.Accordion("Advanced (Optional)", open=False):
             cfg_scale_raw = gr.Textbox(label="CFG Scale Override (optional)", value="")
@@ -521,6 +543,7 @@ def build_ui() -> gr.Blocks:
                 cfg_min_t = gr.Number(label="CFG Min t", value=0.5)
                 cfg_max_t = gr.Number(label="CFG Max t", value=1.0)
                 context_kv_cache = gr.Checkbox(label="Context KV Cache", value=True)
+                speaker_kv_scale_raw = gr.Textbox(label="Speaker KV Scale (optional)", value="")
             with gr.Row():
                 max_text_len_raw = gr.Textbox(label="Max Text Len (optional)", value="")
                 max_caption_len_raw = gr.Textbox(label="Max Caption Len (optional)", value="")
@@ -565,6 +588,7 @@ def build_ui() -> gr.Blocks:
                 codec_precision,
                 text,
                 caption,
+                ref_wav,
                 num_steps,
                 num_candidates,
                 seed_raw,
@@ -575,10 +599,12 @@ def build_ui() -> gr.Blocks:
                 cfg_guidance_mode,
                 cfg_scale_text,
                 cfg_scale_caption,
+                cfg_scale_speaker,
                 cfg_scale_raw,
                 cfg_min_t,
                 cfg_max_t,
                 context_kv_cache,
+                speaker_kv_scale_raw,
                 max_text_len_raw,
                 max_caption_len_raw,
                 truncation_factor_raw,

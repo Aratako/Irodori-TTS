@@ -12,7 +12,7 @@ sentencepiece>=0.1.99,<0.2
 silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152
 torch>=2.10.0
 torchaudio>=2.10.0
-torchcodec>=0.10.0
+torchcodec>=0.10.0,<0.11.0
 transformers<5
 tqdm>=4.67.3
 wandb>=0.17.0

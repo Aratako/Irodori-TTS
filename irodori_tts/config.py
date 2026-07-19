@@ -22,6 +22,7 @@ class ModelConfig:
     text_layers: int = 14
     text_heads: int = 10
     use_caption_condition: bool = False
+    use_speaker_condition: bool | None = None
     caption_vocab_size: int | None = None
     caption_tokenizer_repo: str | None = None
     caption_add_bos: bool | None = None
@@ -45,6 +46,8 @@ class ModelConfig:
     duration_architecture: str = "token_sum_adarn_zero_no_aux"
     duration_token_init_frames: float = 9.0
     duration_speaker_fusion: str = "adarn_zero"
+    duration_caption_fusion: str = "adarn_zero"
+    duration_caption_pooling: str = "masked_mean"
 
     @property
     def patched_latent_dim(self) -> int:
@@ -55,10 +58,11 @@ class ModelConfig:
         return self.patched_latent_dim * self.speaker_patch_size
 
     @property
-    def use_speaker_condition(self) -> bool:
-        # Voice-design checkpoints are caption-driven and intentionally omit
-        # reference-speaker conditioning to avoid the easier shortcut.
-        return not bool(self.use_caption_condition)
+    def use_speaker_condition_resolved(self) -> bool:
+        # Legacy compatibility: old caption configs implied no speaker branch.
+        if self.use_speaker_condition is None:
+            return not bool(self.use_caption_condition)
+        return bool(self.use_speaker_condition)
 
     @property
     def text_mlp_ratio_resolved(self) -> float:
@@ -167,6 +171,7 @@ class TrainConfig:
     rf_loss_mode: str = "echo"
     duration_loss_weight: float = 0.1
     duration_speaker_dropout: float = 0.1
+    duration_caption_dropout: float = 0.1
     duration_huber_delta: float = 0.1
     timestep_logit_mean: float = 0.0
     timestep_logit_std: float = 1.0

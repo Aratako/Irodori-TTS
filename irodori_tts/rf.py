@@ -174,7 +174,7 @@ def sample_euler_rf_cfg(
         cfg_scale_text = float(cfg_scale)
         cfg_scale_caption = float(cfg_scale)
         cfg_scale_speaker = float(cfg_scale)
-    if not model.cfg.use_speaker_condition:
+    if not model.cfg.use_speaker_condition_resolved:
         cfg_scale_speaker = 0.0
         speaker_kv_scale = None
     speaker_uncond_mode = str(speaker_uncond_mode).strip().lower()
@@ -237,7 +237,7 @@ def sample_euler_rf_cfg(
     text_mask_uncond = torch.zeros_like(text_mask_cond)
     speaker_state_uncond = None
     speaker_mask_uncond = None
-    if model.cfg.use_speaker_condition:
+    if model.cfg.use_speaker_condition_resolved:
         if speaker_state_cond is None or speaker_mask_cond is None:
             raise RuntimeError(
                 "Speaker conditioning is enabled but encoded speaker state is missing."

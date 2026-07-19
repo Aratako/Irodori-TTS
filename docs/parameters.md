@@ -4,17 +4,21 @@ This document explains the main inference and training parameters used by Irodor
 
 ## Version Notes
 
-`main` currently targets the v3 codebase. It remains backward-compatible with v2
-checkpoints, including the current VoiceDesign release.
+`main` currently targets the v3 codebase, including the
+`Aratako/Irodori-TTS-500M-v3` base release and the
+`Aratako/Irodori-TTS-600M-v3-VoiceDesign` 3-branch VoiceDesign release. It
+remains backward-compatible with v2 checkpoints, including the released v2
+VoiceDesign checkpoint.
 
-- v3 base checkpoints include the integrated duration predictor and can estimate output
-  length automatically when `--seconds` is omitted.
+- v3 base and v3 VoiceDesign checkpoints include the integrated duration predictor and
+  can estimate output length automatically when `--seconds` is omitted.
 - v3 base release training is split into two phases: first the RF/DiT body, then
   `duration_only` training for the duration predictor.
 - v2 checkpoints do not include the duration predictor and were trained with fixed
   30-second targets, but they are still supported by the v3 code.
-- VoiceDesign checkpoints currently use the v2 release, set `use_caption_condition: true`,
-  and intentionally disable speaker/reference conditioning.
+- v2 VoiceDesign checkpoints set `use_caption_condition: true` and intentionally disable
+  speaker/reference conditioning. v3 VoiceDesign sets both `use_caption_condition: true`
+  and `use_speaker_condition: true` for text + speaker/reference + caption conditioning.
 
 ## Inference Parameters
 
@@ -35,9 +39,9 @@ Use either `--checkpoint` or `--hf-checkpoint`, not both.
 |-----------|---------|-------|
 | `--text` | required | Text to synthesize. It is tokenized with the checkpoint's text tokenizer. |
 | `--caption` | `None` | Voice and style-control text for VoiceDesign checkpoints. Ignored or ineffective for checkpoints without caption conditioning. |
-| `--ref-wav` | `None` | Reference waveform used for speaker/style conditioning in the base model. |
+| `--ref-wav` | `None` | Reference waveform used for speaker/style conditioning in speaker-enabled checkpoints, including v3 VoiceDesign. |
 | `--ref-latent` | `None` | Precomputed reference latent (`.pt`) used instead of encoding `--ref-wav` at inference time. Useful for repeated inference with the same reference. |
-| `--no-ref` | `False` | Disables speaker/reference conditioning. Use this for VoiceDesign checkpoints, or for text-only inference with base checkpoints. |
+| `--no-ref` | `False` | Disables speaker/reference conditioning for the request. Use this for v2 VoiceDesign or for text-only/text+caption-only inference with speaker-enabled checkpoints. |
 | `--ref-embed` | `None` | Speaker Inversion embedding (`.speaker.safetensors`) path. Mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`. Use the file produced by Speaker Inversion training instead of a reference waveform. |
 | `--max-ref-seconds` | `30.0` | Caps the reference audio duration before encoding. The released models were trained on audio up to 30 seconds, so keeping the default cap is recommended. Set `<=0` only when you intentionally want to disable the cap. |
 | `--ref-normalize-db` | `-16.0` | Loudness target applied to reference audio before DACVAE encode. This normalization was used when training the codec, so keeping the default is recommended. Use `none` only for controlled experiments. |
@@ -60,13 +64,13 @@ speaker reference is reused many times.
 
 The recommended duration behavior depends on the checkpoint:
 
-- v2 checkpoints, including the VoiceDesign release, were trained with fixed 30-second
+- v2 checkpoints, including the v2 VoiceDesign release, were trained with fixed 30-second
   targets. Setting a different duration is not recommended because it moves inference
   away from the training setup.
-- v3 base checkpoints were trained with variable-length targets and an integrated
-  duration predictor. For these checkpoints, leaving `--seconds` unset is recommended so
-  the model can choose the duration automatically. Manual `--seconds` is still available
-  when exact control is needed.
+- v3 base and v3 VoiceDesign checkpoints were trained with variable-length targets and
+  an integrated duration predictor. For these checkpoints, leaving `--seconds` unset is
+  recommended so the model can choose the duration automatically. Manual `--seconds` is
+  still available when exact control is needed.
 
 When `--seconds` is omitted, the runtime checks whether the loaded checkpoint has
 duration-predictor weights. If it does, the predicted frame count is used and then scaled
@@ -118,8 +122,8 @@ In `independent` mode, each enabled condition gets its own unconditional branch 
 single larger batch. This is the most flexible mode for using different text, caption,
 and speaker scales, but the batch size during CFG steps grows with the number of enabled
 conditions, so it can use more VRAM and compute. In NFE terms, it is
-`1 + number_of_enabled_cfg_conditions` during CFG-active steps; the released base and
-VoiceDesign setups commonly have two enabled CFG conditions, so this is typically 3x.
+`1 + number_of_enabled_cfg_conditions` during CFG-active steps. v3 3-branch VoiceDesign can
+enable text, speaker, and caption CFG at the same time.
 `joint` drops all enabled conditions together and expects equal CFG scales; it uses the
 conditional branch plus one joint unconditional branch during CFG steps, so it is 2x
 NFE. `alternating` also uses one unconditional branch per CFG step, so it is 2x NFE,
@@ -181,7 +185,8 @@ running many requests with similar shapes.
 
 Tail trimming was mainly introduced for v2 checkpoints, which generate fixed 30-second
 outputs and can leave unused trailing regions after the spoken content. It is less
-important for v3 base checkpoints because they predict a more appropriate output length.
+important for v3 base and v3 VoiceDesign checkpoints because they predict a more
+appropriate output length.
 If valid audio is being trimmed too aggressively, disable `--trim-tail` first.
 Adjust the tail thresholds only when you need fine control over the trimming heuristic.
 
@@ -195,7 +200,7 @@ override YAML values when explicitly provided.
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `--config` | `None` | YAML file containing `model` and `train` overrides. |
-| `--manifest` | required | JSONL manifest produced by `prepare_manifest.py`. Each row must include `text` and `latent_path`; `speaker_id` and `caption` are optional depending on the model. |
+| `--manifest` | required | JSONL manifest produced by `prepare_manifest.py`. Each row must include `text` and `latent_path`; `speaker_id` and `caption` are optional depending on the model. `caption` may be either a string or a list of strings; list captions are sampled randomly each time the row is loaded. |
 | `--output-dir` | `outputs/irodori_tts` | Directory for checkpoints, trainer state, configs, and logs. |
 | `--init-checkpoint` | `None` | Initializes model weights from a `.pt` or `.safetensors` checkpoint, then starts optimizer/scheduler state from scratch. |
 | `--resume` | `None` | Restores full training state from a training checkpoint. Use `.pt` for full-model runs and checkpoint directories for LoRA runs. |
@@ -207,13 +212,14 @@ only to continue an interrupted training run.
 
 | Field | Notes |
 |-------|-------|
-| `latent_dim` | DACVAE latent dimension expected by the model. v2/v3 500M configs use `32`. |
+| `latent_dim` | DACVAE latent dimension expected by the model. The released v2/v3 configs, including 600M v3 VoiceDesign, use `32`. |
 | `latent_patch_size` | Number of latent frames grouped per model token. |
 | `model_dim`, `num_layers`, `num_heads`, `mlp_ratio` | Main diffusion transformer width, depth, attention heads, and MLP expansion. |
 | `text_tokenizer_repo`, `text_vocab_size`, `text_add_bos` | Tokenizer and vocabulary settings for the text encoder. |
 | `text_dim`, `text_layers`, `text_heads`, `text_mlp_ratio` | Text encoder size. |
-| `speaker_dim`, `speaker_layers`, `speaker_heads`, `speaker_patch_size`, `speaker_mlp_ratio` | Reference/speaker encoder size. Ignored when caption conditioning disables speaker conditioning. |
-| `use_caption_condition` | Enables the VoiceDesign caption path and disables speaker/reference conditioning. |
+| `speaker_dim`, `speaker_layers`, `speaker_heads`, `speaker_patch_size`, `speaker_mlp_ratio` | Reference/speaker encoder size. Used when resolved speaker conditioning is enabled. |
+| `use_caption_condition` | Enables the VoiceDesign caption path. |
+| `use_speaker_condition` | Optional explicit speaker-conditioning flag. `null` keeps legacy behavior: caption-free configs enable speaker conditioning, caption-enabled configs disable it. Set `true` with `use_caption_condition: true` for v3 3-branch VoiceDesign. |
 | `caption_*` fields | Caption encoder tokenizer and architecture. When left unset, many fields inherit the corresponding text settings. |
 | `timestep_embed_dim`, `adaln_rank`, `norm_eps` | Diffusion conditioning and normalization parameters. |
 | `use_duration_predictor` | Enables v3 duration prediction. |
@@ -237,7 +243,7 @@ handled by the code.
 | `fixed_target_full_mask` / `--fixed-target-full-mask` | `True` | For fixed-length training, includes padded tail positions in the loss mask. |
 | `rf_loss_mode` / `--rf-loss-mode` | `echo` | RF loss normalization. `utterance_mean` averages per utterance and is used by v3 variable-length configs. |
 
-The v2 and current VoiceDesign configs use fixed 30-second targets. The v3 phase-1 body
+The v2 configs use fixed 30-second targets. The v3 phase-1 body, v3 VoiceDesign phase-1,
 and phase-2 duration configs set `fixed_target_latent_steps: null`,
 `fixed_target_full_mask: false`, and `rf_loss_mode: utterance_mean` so samples can keep
 their natural lengths.
@@ -261,8 +267,8 @@ their natural lengths.
 | `min_lr_scale` / `--min-lr-scale` | `0.1` | Minimum LR multiplier at the end of decay. |
 | `grad_clip_norm` | `1.0` | Gradient clipping norm. Currently configured through YAML. |
 
-The 500M example configs use `optimizer: muon` and `lr_scheduler: wsd`. When changing
-effective batch size, revisit the learning rate and warmup length together.
+The full-training v3 example configs use `optimizer: muon` and `lr_scheduler: wsd`.
+When changing effective batch size, revisit the learning rate and warmup length together.
 
 ### Condition Dropout and Timesteps
 
@@ -283,7 +289,8 @@ quality.
 
 | Parameter / Field | Default in dataclass | Notes |
 |-------------------|----------------------|-------|
-| `use_caption_condition` | `False` | Model config field that enables caption conditioning and disables speaker/reference conditioning. |
+| `use_caption_condition` | `False` | Model config field that enables caption conditioning. |
+| `use_speaker_condition` | `None` | Explicit speaker branch control. `None` preserves legacy caption-implies-no-speaker behavior. |
 | `caption_warmup` / `--caption-warmup` | `False` | During early training, updates only caption-only parameters. |
 | `caption_warmup_steps` / `--caption-warmup-steps` | `0` | Number of optimizer steps for caption-only warmup. |
 
@@ -292,8 +299,10 @@ caption branch may need to catch up before normal joint training. `warmup_steps`
 controls the learning-rate scheduler; `caption_warmup_steps` controls which parameters
 receive gradients during the caption warmup phase.
 
-The public VoiceDesign checkpoint is currently v2-based. Use the v2 VoiceDesign configs
-for this path until a v3 VoiceDesign checkpoint is released.
+The 600M v3 VoiceDesign recipe is two-phase: phase 1 trains RF/DiT + caption branch
+from the v3 base checkpoint without reusing the base duration predictor, then phase 2
+adds a newly initialized duration predictor trained with text + speaker/reference +
+caption states.
 
 ### Duration Predictor
 
@@ -303,18 +312,21 @@ for this path until a v3 VoiceDesign checkpoint is released.
 | `train_mode` / `--train-mode` | `rf` | `rf` trains the RF model; `duration_only` freezes non-duration parameters and trains only the duration predictor. |
 | `duration_loss_weight` / `--duration-loss-weight` | `0.1` | Weight of duration loss when training jointly with RF loss. |
 | `duration_speaker_dropout` / `--duration-speaker-dropout` | `0.1` | Dropout for speaker features in duration prediction. |
+| `duration_caption_dropout` / `--duration-caption-dropout` | `0.1` | Dropout for caption features in duration prediction. |
 | `duration_huber_delta` / `--duration-huber-delta` | `0.1` | Huber delta for the log-duration regression loss. |
-| `duration_architecture` | `token_sum_adarn_zero_no_aux` | Duration predictor architecture. |
+| `duration_architecture` | `token_sum_adarn_zero_no_aux` | Duration predictor architecture. v3 VoiceDesign duration configs use `token_sum_dual_adarn_zero_no_aux`. |
 | `duration_hidden_dim`, `duration_layers`, `duration_dropout` | `1024`, `3`, `0.1` | Duration predictor residual SwiGLU width, depth, and dropout. |
 | `duration_attention_heads` | `8` | Attention heads used by pooled duration variants. It is kept in config for shared DP construction; the token-sum phase2 config does not use pooling attention. |
 | `duration_speaker_fusion` | `adarn_zero` | Speaker conditioning mode. `token_sum_adarn_zero_no_aux` requires `adarn_zero`. |
+| `duration_caption_fusion` | `adarn_zero` | Caption conditioning mode for duration prediction. `token_sum_dual_adarn_zero_no_aux` requires `adarn_zero`. |
+| `duration_caption_pooling` | `masked_mean` | Caption pooling strategy used before caption-conditioned duration fusion. |
 | `duration_token_init_frames` | `9.0` | Initial frames-per-token for token-sum duration heads. Initial predictions are roughly `valid_token_count * duration_token_init_frames`. |
 | `duration_aux_dim` | `14` | Size of auxiliary duration features produced by the dataset pipeline. Token-sum no-aux models validate/pass this tensor for pipeline compatibility but do not use it in the prediction. |
 
 The duration target is `log1p(num_frames)` and the runtime converts predictions back to
-latent frames for inference. The v3 base release uses this predictor as an integrated
-part of inference. Use `duration_only` when you want to add or refine duration prediction
-without updating the main RF model.
+latent frames for inference. The v3 base and 600M v3 VoiceDesign releases use this
+predictor as an integrated part of inference. Use `duration_only` when you want to add
+or refine duration prediction without updating the main RF model.
 
 The current v3 phase2 duration config uses a token contribution sum predictor after
 ablation against pooled-vector speaker fusion variants. It keeps the encoded text sequence,
@@ -416,9 +428,9 @@ manifest consumed by `train.py`.
 | `--merge-output` | `False` | Merges per-rank manifest shards after multi-GPU preprocessing. |
 | `--streaming` | `False` | Loads the dataset in streaming mode. |
 
-For speaker-conditioned training, include a stable `speaker_id`. For VoiceDesign
-training, include `caption`; `speaker_id` is optional because the model disables the
-speaker/reference branch when `use_caption_condition: true`.
+For speaker-conditioned training, include a stable `speaker_id`. For v2 VoiceDesign training,
+include `caption`; `speaker_id` is optional. For v3 VoiceDesign training, include both
+`caption` and `speaker_id` so all three branches can be trained.
 
 ## Tuning Recipes
 

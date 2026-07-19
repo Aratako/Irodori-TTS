@@ -364,7 +364,10 @@ def main() -> None:
     ref_group.add_argument(
         "--no-ref",
         action="store_true",
-        help="Run without speaker reference conditioning. Use this for voice-design checkpoints.",
+        help=(
+            "Run without speaker reference conditioning. Valid for text-only or "
+            "text+caption-only inference even when the checkpoint supports speaker conditioning."
+        ),
     )
     args = parser.parse_args()
 
@@ -384,7 +387,7 @@ def main() -> None:
             compile_dynamic=bool(args.compile_dynamic),
         )
     )
-    if runtime.model_cfg.use_speaker_condition and not (
+    if runtime.model_cfg.use_speaker_condition_resolved and not (
         args.no_ref
         or args.ref_wav is not None
         or args.ref_latent is not None
@@ -394,6 +397,9 @@ def main() -> None:
             "speaker-conditioned checkpoints require one of --ref-wav, --ref-latent, "
             "--ref-embed, or --no-ref."
         )
+    use_speaker_for_request = bool(
+        runtime.model_cfg.use_speaker_condition_resolved and not args.no_ref
+    )
     cfg_scale_text, cfg_scale_caption, cfg_scale_speaker, scale_messages = resolve_cfg_scales(
         cfg_guidance_mode=str(args.cfg_guidance_mode),
         cfg_scale_text=float(args.cfg_scale_text),
@@ -405,7 +411,7 @@ def main() -> None:
             and args.caption is not None
             and str(args.caption).strip() != ""
         ),
-        use_speaker_condition=bool(runtime.model_cfg.use_speaker_condition),
+        use_speaker_condition=use_speaker_for_request,
     )
     for msg in scale_messages:
         print(msg)
