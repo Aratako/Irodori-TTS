@@ -819,19 +819,14 @@ def build_ui() -> gr.Blocks:
     #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
     saved_checkpoint = last_settings.get("checkpoint", default_checkpoint)
     if saved_checkpoint != default_checkpoint:
-        official_prefix = "Aratako/Irodori-TTS-500M-v"
-        if saved_checkpoint.startswith(official_prefix) and default_checkpoint.startswith(official_prefix):
-            try:
-                saved_ver_str = saved_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
-                default_ver_str = default_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
-                saved_ver = int(saved_ver_str)
-                default_ver = int(default_ver_str)
-                if saved_ver < default_ver:
-                    saved_checkpoint = default_checkpoint
-            except ValueError:
+        # 古い公式チェックポイントから最新への移行マップ（500M->600Mパラメータ数変更対応含む）
+        _UPGRADE_MAP = {
+            "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-500M-v3",
+            "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
+        }
+        if saved_checkpoint in _UPGRADE_MAP:
+            if _UPGRADE_MAP[saved_checkpoint] == default_checkpoint:
                 saved_checkpoint = default_checkpoint
-        elif saved_checkpoint == "Aratako/Irodori-TTS-500M-v2":
-            saved_checkpoint = default_checkpoint
 
     # 必須の選択肢を検証しながら復元
     saved_model_device = last_settings.get("model_device", default_model_device)
@@ -1347,19 +1342,14 @@ def build_ui() -> gr.Blocks:
             #      ただし、ユーザーがローカルの独自チェックポイントを明示的に指定している場合はその設定を維持する。
             saved_checkpoint = s.get("checkpoint", default_checkpoint)
             if saved_checkpoint != default_checkpoint:
-                official_prefix = "Aratako/Irodori-TTS-500M-v"
-                if saved_checkpoint.startswith(official_prefix) and default_checkpoint.startswith(official_prefix):
-                    try:
-                        saved_ver_str = saved_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
-                        default_ver_str = default_checkpoint[len(official_prefix):].split("-")[0].replace("v", "")
-                        saved_ver = int(saved_ver_str)
-                        default_ver = int(default_ver_str)
-                        if saved_ver < default_ver:
-                            saved_checkpoint = default_checkpoint
-                    except ValueError:
+                # 古い公式チェックポイントから最新への移行マップ（500M->600Mパラメータ数変更対応含む）
+                _UPGRADE_MAP = {
+                    "Aratako/Irodori-TTS-500M-v2": "Aratako/Irodori-TTS-500M-v3",
+                    "Aratako/Irodori-TTS-500M-v2-VoiceDesign": "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
+                }
+                if saved_checkpoint in _UPGRADE_MAP:
+                    if _UPGRADE_MAP[saved_checkpoint] == default_checkpoint:
                         saved_checkpoint = default_checkpoint
-                elif saved_checkpoint == "Aratako/Irodori-TTS-500M-v2":
-                    saved_checkpoint = default_checkpoint
 
             # 必須の選択肢を検証しながら復元
             m_device = s.get("model_device", default_model_device)
