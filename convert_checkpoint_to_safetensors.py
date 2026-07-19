@@ -333,6 +333,7 @@ def _validate_checkpoint_upgrade_partial_load(
     *,
     allow_caption_missing: bool,
     allow_duration_missing: bool,
+    allow_duration_extra: bool,
     allow_speaker_extra: bool,
 ) -> None:
     if skipped_shape:
@@ -344,6 +345,8 @@ def _validate_checkpoint_upgrade_partial_load(
     unexpected_extra = skipped_extra
     if allow_speaker_extra:
         unexpected_extra = [key for key in unexpected_extra if not _is_speaker_only_parameter(key)]
+    if allow_duration_extra:
+        unexpected_extra = [key for key in unexpected_extra if not _is_duration_only_parameter(key)]
     if unexpected_extra:
         raise ValueError(
             "Unexpected checkpoint keys while upgrading checkpoint config: "
@@ -378,17 +381,19 @@ def _load_adapter_checkpoint(
     current_has_caption = bool(resolved_model_cfg.use_caption_condition)
     checkpoint_has_duration = _checkpoint_uses_duration_predictor(base_model_cfg, base_state)
     current_has_duration = bool(resolved_model_cfg.use_duration_predictor)
+    drop_duration = checkpoint_has_duration and not current_has_duration
     if checkpoint_has_caption and not current_has_caption:
         raise ValueError(
             "Caption-conditioned base checkpoint cannot initialize a caption-free adapter config."
         )
-    if checkpoint_has_duration and not current_has_duration:
+    if drop_duration and not (current_has_caption and not checkpoint_has_caption):
         raise ValueError(
-            "Duration-predictor base checkpoint cannot initialize a duration-free adapter config."
+            "Duration-predictor base checkpoint cannot initialize a duration-free adapter config "
+            "unless upgrading a caption-free base checkpoint to a caption-enabled phase-1 config."
         )
     upgrade_caption = current_has_caption and not checkpoint_has_caption
     upgrade_duration = current_has_duration and not checkpoint_has_duration
-    if upgrade_caption or upgrade_duration:
+    if upgrade_caption or upgrade_duration or drop_duration:
         missing_keys, skipped_shape, skipped_extra = _load_model_state_partially(model, base_state)
         _validate_checkpoint_upgrade_partial_load(
             base_path,
@@ -397,7 +402,10 @@ def _load_adapter_checkpoint(
             skipped_extra,
             allow_caption_missing=upgrade_caption,
             allow_duration_missing=upgrade_duration,
-            allow_speaker_extra=upgrade_caption,
+            allow_duration_extra=drop_duration,
+            allow_speaker_extra=(
+                upgrade_caption and not resolved_model_cfg.use_speaker_condition_resolved
+            ),
         )
     else:
         model.load_state_dict(base_state, strict=True)

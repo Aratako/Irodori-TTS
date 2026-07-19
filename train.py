@@ -40,6 +40,8 @@ from irodori_tts.lora import (
 )
 from irodori_tts.model import (
     DURATION_ARCHITECTURES,
+    DURATION_CAPTION_FUSIONS,
+    DURATION_CAPTION_POOLINGS,
     DURATION_SPEAKER_FUSIONS,
     TextToLatentRFDiT,
 )
@@ -70,6 +72,17 @@ CHECKPOINT_BEST_VAL_LOSS_RE = re.compile(
 )
 SAFETENSORS_CONFIG_META_KEY = "config_json"
 SAFETENSORS_INFERENCE_CONFIG_KEYS = {"max_text_len", "max_caption_len", "fixed_target_latent_steps"}
+DURATION_CONDITION_GROUPS = (
+    "speaker",
+    "no_speaker",
+    "caption",
+    "no_caption",
+    "speaker_caption",
+    "speaker_no_caption",
+    "no_speaker_caption",
+    "no_speaker_no_caption",
+)
+DURATION_CONDITION_GROUP_TOTAL_SIZE = len(DURATION_CONDITION_GROUPS) * 3
 
 
 def set_seed(seed: int) -> None:
@@ -578,7 +591,10 @@ def _check_model_config_compatibility(
         ),
         ("adaln_rank", checkpoint_cfg.adaln_rank, current_model_cfg.adaln_rank),
     ]
-    if checkpoint_cfg.use_speaker_condition and current_model_cfg.use_speaker_condition:
+    if (
+        checkpoint_cfg.use_speaker_condition_resolved
+        and current_model_cfg.use_speaker_condition_resolved
+    ):
         comparisons.extend(
             [
                 ("speaker_dim", checkpoint_cfg.speaker_dim, current_model_cfg.speaker_dim),
@@ -606,8 +622,8 @@ def _check_model_config_compatibility(
                 ),
                 (
                     "use_speaker_condition",
-                    checkpoint_cfg.use_speaker_condition,
-                    current_model_cfg.use_speaker_condition,
+                    checkpoint_cfg.use_speaker_condition_resolved,
+                    current_model_cfg.use_speaker_condition_resolved,
                 ),
                 (
                     "caption_vocab_size",
@@ -796,6 +812,7 @@ def validate_checkpoint_upgrade_partial_load(
     *,
     allow_caption_missing: bool,
     allow_duration_missing: bool,
+    allow_duration_extra: bool,
     allow_speaker_extra: bool,
 ) -> None:
     if skipped_shape:
@@ -807,6 +824,8 @@ def validate_checkpoint_upgrade_partial_load(
     unexpected_extra = skipped_extra
     if allow_speaker_extra:
         unexpected_extra = [key for key in unexpected_extra if not is_speaker_only_parameter(key)]
+    if allow_duration_extra:
+        unexpected_extra = [key for key in unexpected_extra if not is_duration_only_parameter(key)]
     if unexpected_extra:
         raise ValueError(
             "Unexpected checkpoint keys while upgrading checkpoint config: "
@@ -976,15 +995,17 @@ def _apply_base_initialization(
         current_has_caption = bool(model_cfg.use_caption_condition)
         checkpoint_has_duration = checkpoint_uses_duration_predictor(init_model_cfg, init_state)
         current_has_duration = bool(model_cfg.use_duration_predictor)
+        drop_duration = checkpoint_has_duration and not current_has_duration
         if checkpoint_has_caption and not current_has_caption:
             raise ValueError(
                 "Caption-conditioned checkpoint cannot initialize a caption-free config. "
                 "Use a caption-enabled config for this checkpoint."
             )
-        if checkpoint_has_duration and not current_has_duration:
+        if drop_duration and not (current_has_caption and not checkpoint_has_caption):
             raise ValueError(
                 "Duration-predictor checkpoint cannot initialize a duration-free config. "
-                "Use a duration-enabled config for this checkpoint."
+                "Use a duration-enabled config for this checkpoint, or initialize a "
+                "caption-enabled phase-1 VoiceDesign model from a caption-free base checkpoint."
             )
 
         require_caption_match = checkpoint_has_caption and current_has_caption
@@ -999,7 +1020,7 @@ def _apply_base_initialization(
         initialized_caption_embedding = False
         upgrade_caption = current_has_caption and not checkpoint_has_caption
         upgrade_duration = current_has_duration and not checkpoint_has_duration
-        if upgrade_caption or upgrade_duration:
+        if upgrade_caption or upgrade_duration or drop_duration:
             missing_keys, skipped_shape, skipped_extra = load_model_state_partially(
                 raw_model,
                 init_state,
@@ -1011,7 +1032,10 @@ def _apply_base_initialization(
                 skipped_extra,
                 allow_caption_missing=upgrade_caption,
                 allow_duration_missing=upgrade_duration,
-                allow_speaker_extra=upgrade_caption,
+                allow_duration_extra=drop_duration,
+                allow_speaker_extra=(
+                    upgrade_caption and not model_cfg.use_speaker_condition_resolved
+                ),
             )
         else:
             raw_model.load_state_dict(init_state, strict=True)
@@ -1104,30 +1128,115 @@ def reduce_sum(value: torch.Tensor, distributed: bool) -> torch.Tensor:
     return reduced
 
 
-def duration_speaker_group_totals(
+def duration_condition_group_totals(
     *,
     duration_loss_per_sample: torch.Tensor,
     pred_frames: torch.Tensor,
     target_frames: torch.Tensor,
     has_speaker: torch.Tensor | None,
+    has_caption: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    totals = torch.zeros(6, device=duration_loss_per_sample.device, dtype=torch.float64)
-    if has_speaker is None:
-        return totals
-
-    speaker_mask = has_speaker.to(device=duration_loss_per_sample.device, dtype=torch.bool)
-    no_speaker_mask = ~speaker_mask
+    totals = torch.zeros(
+        DURATION_CONDITION_GROUP_TOTAL_SIZE,
+        device=duration_loss_per_sample.device,
+        dtype=torch.float64,
+    )
+    device = duration_loss_per_sample.device
+    speaker_mask = (
+        has_speaker.to(device=device, dtype=torch.bool) if has_speaker is not None else None
+    )
+    caption_mask = (
+        has_caption.to(device=device, dtype=torch.bool) if has_caption is not None else None
+    )
     mae_per_sample = (pred_frames.float() - target_frames.float()).abs()
 
-    if speaker_mask.any():
-        totals[0] = duration_loss_per_sample[speaker_mask].detach().double().sum()
-        totals[1] = mae_per_sample[speaker_mask].detach().double().sum()
-        totals[2] = speaker_mask.sum().double()
-    if no_speaker_mask.any():
-        totals[3] = duration_loss_per_sample[no_speaker_mask].detach().double().sum()
-        totals[4] = mae_per_sample[no_speaker_mask].detach().double().sum()
-        totals[5] = no_speaker_mask.sum().double()
+    group_masks: dict[str, torch.Tensor | None] = {
+        "speaker": speaker_mask,
+        "no_speaker": None if speaker_mask is None else ~speaker_mask,
+        "caption": caption_mask,
+        "no_caption": None if caption_mask is None else ~caption_mask,
+        "speaker_caption": None
+        if speaker_mask is None or caption_mask is None
+        else speaker_mask & caption_mask,
+        "speaker_no_caption": None
+        if speaker_mask is None or caption_mask is None
+        else speaker_mask & (~caption_mask),
+        "no_speaker_caption": None
+        if speaker_mask is None or caption_mask is None
+        else (~speaker_mask) & caption_mask,
+        "no_speaker_no_caption": None
+        if speaker_mask is None or caption_mask is None
+        else (~speaker_mask) & (~caption_mask),
+    }
+
+    for group_index, group_name in enumerate(DURATION_CONDITION_GROUPS):
+        mask = group_masks[group_name]
+        if mask is None or not mask.any():
+            continue
+        offset = group_index * 3
+        totals[offset] = duration_loss_per_sample[mask].detach().double().sum()
+        totals[offset + 1] = mae_per_sample[mask].detach().double().sum()
+        totals[offset + 2] = mask.sum().double()
     return totals
+
+
+def duration_condition_group_metrics(totals: torch.Tensor) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for group_index, group_name in enumerate(DURATION_CONDITION_GROUPS):
+        offset = group_index * 3
+        count = max(float(totals[offset + 2].item()), 0.0)
+        metrics[f"duration_loss_{group_name}"] = (
+            float(totals[offset].item() / count) if count > 0.0 else 0.0
+        )
+        metrics[f"duration_mae_frames_{group_name}"] = (
+            float(totals[offset + 1].item() / count) if count > 0.0 else 0.0
+        )
+        metrics[f"duration_samples_{group_name}"] = count
+    return metrics
+
+
+def duration_condition_group_log_suffix(metrics: dict[str, float]) -> str:
+    groups = [
+        ("sp", "speaker"),
+        ("no_sp", "no_speaker"),
+        ("cap", "caption"),
+        ("no_cap", "no_caption"),
+        ("sp_cap", "speaker_caption"),
+        ("sp_no_cap", "speaker_no_caption"),
+        ("no_sp_cap", "no_speaker_caption"),
+        ("no_sp_no_cap", "no_speaker_no_caption"),
+    ]
+    chunks: list[str] = []
+    for label, group in groups:
+        count = metrics.get(f"duration_samples_{group}", 0.0)
+        if count <= 0.0:
+            continue
+        chunks.append(
+            "{}={:.6f} mae_{}={:.2f} n_{}={:.0f}".format(
+                f"dur_{label}",
+                metrics[f"duration_loss_{group}"],
+                label,
+                metrics[f"duration_mae_frames_{group}"],
+                label,
+                count,
+            )
+        )
+    return " ".join(chunks)
+
+
+def duration_condition_group_wandb_metrics(
+    prefix: str,
+    metrics: dict[str, float],
+) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for group_name in DURATION_CONDITION_GROUPS:
+        for metric_name in (
+            f"duration_loss_{group_name}",
+            f"duration_mae_frames_{group_name}",
+            f"duration_samples_{group_name}",
+        ):
+            out[f"{prefix}/{metric_name}"] = metrics[metric_name]
+    return out
 
 
 def split_train_valid_indices(
@@ -1174,7 +1283,11 @@ def run_validation(
     model_cfg = model.module.cfg if isinstance(model, DDP) else model.cfg
     duration_only = train_cfg.train_mode == "duration_only"
     model.eval()
-    totals = torch.zeros(12, device=device, dtype=torch.float64)
+    totals = torch.zeros(
+        6 + DURATION_CONDITION_GROUP_TOTAL_SIZE,
+        device=device,
+        dtype=torch.float64,
+    )
 
     with torch.no_grad():
         for batch in loader:
@@ -1182,14 +1295,16 @@ def run_validation(
             text_mask = batch["text_mask"].to(device, non_blocking=True)
             caption_ids = None
             caption_mask = None
+            has_caption = None
             if model_cfg.use_caption_condition:
                 caption_ids = batch["caption_ids"].to(device, non_blocking=True)
                 caption_mask = batch["caption_mask"].to(device, non_blocking=True)
+                has_caption = batch["has_caption"].to(device, non_blocking=True)
             num_frames = batch["num_frames"].to(device, non_blocking=True)
             duration_features = batch["duration_features"].to(device, non_blocking=True)
             ref_latent = None
             ref_mask = None
-            if model_cfg.use_speaker_condition:
+            if model_cfg.use_speaker_condition_resolved:
                 ref_latent = batch["ref_latent_patched"].to(device, non_blocking=True)
                 ref_mask = batch["ref_latent_mask_patched"].to(device, non_blocking=True)
                 has_speaker = batch["has_speaker"].to(device, non_blocking=True)
@@ -1229,7 +1344,7 @@ def run_validation(
                 x_t = rf_interpolate(x0, noise, t)
                 v_target = rf_velocity_target(x0, noise)
 
-            if model_cfg.use_speaker_condition:
+            if model_cfg.use_speaker_condition_resolved:
                 if train_cfg.speaker_inversion_enabled:
                     # Speaker Inversion learns one embedding for this run, so validation
                     # should match training and treat every sample as speaker-conditioned.
@@ -1245,6 +1360,7 @@ def run_validation(
             else:
                 speaker_condition_dropout = None
                 duration_has_speaker = None
+            duration_has_caption = has_caption if model_cfg.use_caption_condition else None
 
             with (
                 torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -1264,6 +1380,7 @@ def run_validation(
                         latent_mask=None,
                         duration_features=duration_features,
                         duration_has_speaker=duration_has_speaker,
+                        duration_has_caption=duration_has_caption,
                         duration_only=True,
                     )
                     v_pred = None
@@ -1281,9 +1398,10 @@ def run_validation(
                         speaker_condition_dropout=speaker_condition_dropout,
                         duration_features=duration_features,
                         duration_has_speaker=duration_has_speaker,
+                        duration_has_caption=duration_has_caption,
                     )
                 else:
-                    if model_cfg.use_speaker_condition:
+                    if model_cfg.use_speaker_condition_resolved:
                         ref_mask = ref_mask & use_speaker[:, None]
                         ref_latent = ref_latent * use_speaker[:, None, None].to(ref_latent.dtype)
                     v_pred = model(
@@ -1329,11 +1447,12 @@ def run_validation(
                 pred_frames = torch.expm1(duration_pred.float()).clamp_min(0.0)
                 duration_mae_frames = (pred_frames - num_frames.float()).abs().mean()
                 if duration_only:
-                    totals[6:12] += duration_speaker_group_totals(
+                    totals[6:] += duration_condition_group_totals(
                         duration_loss_per_sample=duration_loss_per_sample,
                         pred_frames=pred_frames,
                         target_frames=num_frames.float(),
                         has_speaker=has_speaker,
+                        has_caption=has_caption,
                     )
             if duration_only:
                 loss = duration_loss
@@ -1360,26 +1479,7 @@ def run_validation(
         "num_samples": float(totals[5].item()),
     }
     if duration_only:
-        speaker_count = max(float(totals[8].item()), 0.0)
-        no_speaker_count = max(float(totals[11].item()), 0.0)
-        metrics.update(
-            {
-                "duration_loss_speaker": (
-                    float(totals[6].item() / speaker_count) if speaker_count > 0.0 else 0.0
-                ),
-                "duration_mae_frames_speaker": (
-                    float(totals[7].item() / speaker_count) if speaker_count > 0.0 else 0.0
-                ),
-                "duration_samples_speaker": speaker_count,
-                "duration_loss_no_speaker": (
-                    float(totals[9].item() / no_speaker_count) if no_speaker_count > 0.0 else 0.0
-                ),
-                "duration_mae_frames_no_speaker": (
-                    float(totals[10].item() / no_speaker_count) if no_speaker_count > 0.0 else 0.0
-                ),
-                "duration_samples_no_speaker": no_speaker_count,
-            }
-        )
+        metrics.update(duration_condition_group_metrics(totals[6:]))
     if was_training:
         model.train()
     return metrics
@@ -1519,6 +1619,7 @@ def main() -> None:
     )
     parser.add_argument("--duration-loss-weight", type=float, default=None)
     parser.add_argument("--duration-speaker-dropout", type=float, default=None)
+    parser.add_argument("--duration-caption-dropout", type=float, default=None)
     parser.add_argument("--duration-huber-delta", type=float, default=None)
     parser.add_argument(
         "--text-condition-dropout",
@@ -1821,6 +1922,8 @@ def main() -> None:
         train_cfg = replace(train_cfg, duration_loss_weight=args.duration_loss_weight)
     if cli_provided(raw_argv, "--duration-speaker-dropout"):
         train_cfg = replace(train_cfg, duration_speaker_dropout=args.duration_speaker_dropout)
+    if cli_provided(raw_argv, "--duration-caption-dropout"):
+        train_cfg = replace(train_cfg, duration_caption_dropout=args.duration_caption_dropout)
     if cli_provided(raw_argv, "--duration-huber-delta"):
         train_cfg = replace(train_cfg, duration_huber_delta=args.duration_huber_delta)
     if cli_provided(raw_argv, "--log-every"):
@@ -1919,7 +2022,7 @@ def main() -> None:
             f"got {train_cfg.speaker_condition_dropout}"
         )
     if train_cfg.speaker_inversion_enabled:
-        if not model_cfg.use_speaker_condition:
+        if not model_cfg.use_speaker_condition_resolved:
             raise ValueError(
                 "speaker_inversion_enabled=True requires a speaker-conditioned model config."
             )
@@ -1984,6 +2087,10 @@ def main() -> None:
         raise ValueError(
             f"duration_speaker_dropout must be in [0, 1], got {train_cfg.duration_speaker_dropout}"
         )
+    if not (0.0 <= train_cfg.duration_caption_dropout <= 1.0):
+        raise ValueError(
+            f"duration_caption_dropout must be in [0, 1], got {train_cfg.duration_caption_dropout}"
+        )
     if train_cfg.duration_huber_delta <= 0:
         raise ValueError(f"duration_huber_delta must be > 0, got {train_cfg.duration_huber_delta}")
     if train_cfg.train_mode == "duration_only" and not model_cfg.use_duration_predictor:
@@ -2041,6 +2148,18 @@ def main() -> None:
                 "duration_speaker_fusion must be one of "
                 f"{sorted(DURATION_SPEAKER_FUSIONS)}, got {model_cfg.duration_speaker_fusion!r}"
             )
+        duration_caption_fusion = str(model_cfg.duration_caption_fusion).strip().lower()
+        if duration_caption_fusion not in DURATION_CAPTION_FUSIONS:
+            raise ValueError(
+                "duration_caption_fusion must be one of "
+                f"{sorted(DURATION_CAPTION_FUSIONS)}, got {model_cfg.duration_caption_fusion!r}"
+            )
+        duration_caption_pooling = str(model_cfg.duration_caption_pooling).strip().lower()
+        if duration_caption_pooling not in DURATION_CAPTION_POOLINGS:
+            raise ValueError(
+                "duration_caption_pooling must be one of "
+                f"{sorted(DURATION_CAPTION_POOLINGS)}, got {model_cfg.duration_caption_pooling!r}"
+            )
         if (
             duration_architecture == "token_sum_adarn_zero_no_aux"
             and duration_speaker_fusion != "adarn_zero"
@@ -2049,10 +2168,28 @@ def main() -> None:
                 "duration_architecture='token_sum_adarn_zero_no_aux' requires "
                 "duration_speaker_fusion='adarn_zero'."
             )
+        if duration_architecture == "token_sum_dual_adarn_zero_no_aux":
+            if duration_speaker_fusion != "adarn_zero":
+                raise ValueError(
+                    "duration_architecture='token_sum_dual_adarn_zero_no_aux' requires "
+                    "duration_speaker_fusion='adarn_zero'."
+                )
+            if duration_caption_fusion != "adarn_zero":
+                raise ValueError(
+                    "duration_architecture='token_sum_dual_adarn_zero_no_aux' requires "
+                    "duration_caption_fusion='adarn_zero'."
+                )
+            if not model_cfg.use_speaker_condition_resolved or not model_cfg.use_caption_condition:
+                raise ValueError(
+                    "duration_architecture='token_sum_dual_adarn_zero_no_aux' requires "
+                    "both speaker and caption conditioning."
+                )
         model_cfg = replace(
             model_cfg,
             duration_architecture=duration_architecture,
             duration_speaker_fusion=duration_speaker_fusion,
+            duration_caption_fusion=duration_caption_fusion,
+            duration_caption_pooling=duration_caption_pooling,
         )
     if train_cfg.caption_warmup_steps < 0:
         raise ValueError(f"caption_warmup_steps must be >= 0, got {train_cfg.caption_warmup_steps}")
@@ -2189,7 +2326,7 @@ def main() -> None:
         latent_dim=model_cfg.latent_dim,
         max_latent_steps=train_cfg.max_latent_steps,
         enable_caption_condition=model_cfg.use_caption_condition,
-        enable_speaker_condition=model_cfg.use_speaker_condition,
+        enable_speaker_condition=model_cfg.use_speaker_condition_resolved,
         show_manifest_progress=bool(train_cfg.progress and is_main_process),
         manifest_progress_desc="Index Manifest",
     )
@@ -2207,7 +2344,7 @@ def main() -> None:
             max_latent_steps=train_cfg.max_latent_steps,
             subset_indices=train_indices,
             enable_caption_condition=model_cfg.use_caption_condition,
-            enable_speaker_condition=model_cfg.use_speaker_condition,
+            enable_speaker_condition=model_cfg.use_speaker_condition_resolved,
             manifest_index=full_dataset.manifest_index,
         )
         valid_dataset = LatentTextDataset(
@@ -2216,7 +2353,7 @@ def main() -> None:
             max_latent_steps=train_cfg.max_latent_steps,
             subset_indices=valid_indices,
             enable_caption_condition=model_cfg.use_caption_condition,
-            enable_speaker_condition=model_cfg.use_speaker_condition,
+            enable_speaker_condition=model_cfg.use_speaker_condition_resolved,
             manifest_index=full_dataset.manifest_index,
         )
         if is_main_process:
@@ -2247,8 +2384,8 @@ def main() -> None:
         print(
             f"Fixed target latent length enabled: steps={train_cfg.fixed_target_latent_steps} full_mask={train_cfg.fixed_target_full_mask}"
         )
-    if not model_cfg.use_speaker_condition and is_main_process:
-        print("Speaker conditioning disabled for caption-conditioned voice-design model.")
+    if not model_cfg.use_speaker_condition_resolved and is_main_process:
+        print("Speaker conditioning disabled for this model config.")
     if train_cfg.caption_warmup and is_main_process:
         if not model_cfg.use_caption_condition:
             print(
@@ -2577,7 +2714,11 @@ def main() -> None:
         accum_rf_loss = torch.zeros((), device=device, dtype=torch.float32)
         accum_duration_loss = torch.zeros((), device=device, dtype=torch.float32)
         accum_duration_mae_frames = torch.zeros((), device=device, dtype=torch.float32)
-        accum_duration_group_totals = torch.zeros(6, device=device, dtype=torch.float64)
+        accum_duration_group_totals = torch.zeros(
+            DURATION_CONDITION_GROUP_TOTAL_SIZE,
+            device=device,
+            dtype=torch.float64,
+        )
         epoch = 0
         while step < train_cfg.max_steps:
             if train_sampler is not None:
@@ -2598,7 +2739,7 @@ def main() -> None:
                 duration_features = batch["duration_features"].to(device, non_blocking=True)
                 ref_latent = None
                 ref_mask = None
-                if raw_model.cfg.use_speaker_condition:
+                if raw_model.cfg.use_speaker_condition_resolved:
                     ref_latent = batch["ref_latent_patched"].to(device, non_blocking=True)
                     ref_mask = batch["ref_latent_mask_patched"].to(device, non_blocking=True)
                     has_speaker = batch["has_speaker"].to(device, non_blocking=True)
@@ -2643,6 +2784,7 @@ def main() -> None:
                     text_mask[text_cond_drop] = False
                 caption_cond_drop = None
                 caption_drop_for_model = None
+                duration_has_caption = None
                 if raw_model.cfg.use_caption_condition:
                     if has_caption is None or caption_mask is None:
                         raise RuntimeError(
@@ -2653,12 +2795,16 @@ def main() -> None:
                     )
                     use_caption = has_caption & (~caption_cond_drop)
                     caption_drop_for_model = ~use_caption
+                    duration_caption_drop = (
+                        torch.rand(bsz, device=device) < train_cfg.duration_caption_dropout
+                    )
+                    duration_has_caption = has_caption & (~duration_caption_drop)
                     if not raw_model.cfg.use_duration_predictor:
                         caption_mask = caption_mask & use_caption[:, None]
 
                 speaker_drop_for_model = None
                 duration_has_speaker = None
-                if raw_model.cfg.use_speaker_condition:
+                if raw_model.cfg.use_speaker_condition_resolved:
                     speaker_cond_drop = (
                         torch.rand(bsz, device=device) < train_cfg.speaker_condition_dropout
                     )
@@ -2709,6 +2855,7 @@ def main() -> None:
                                 latent_mask=None,
                                 duration_features=duration_features,
                                 duration_has_speaker=duration_has_speaker,
+                                duration_has_caption=duration_has_caption,
                                 duration_only=True,
                             )
                             v_pred = None
@@ -2728,6 +2875,7 @@ def main() -> None:
                                 caption_condition_dropout=caption_drop_for_model,
                                 duration_features=duration_features,
                                 duration_has_speaker=duration_has_speaker,
+                                duration_has_caption=duration_has_caption,
                             )
                         else:
                             v_pred = model(
@@ -2767,7 +2915,11 @@ def main() -> None:
                         )
                     duration_loss = torch.zeros((), device=device, dtype=torch.float32)
                     duration_mae_frames = torch.zeros((), device=device, dtype=torch.float32)
-                    duration_group_totals = torch.zeros(6, device=device, dtype=torch.float64)
+                    duration_group_totals = torch.zeros(
+                        DURATION_CONDITION_GROUP_TOTAL_SIZE,
+                        device=device,
+                        dtype=torch.float64,
+                    )
                     if raw_model.cfg.use_duration_predictor:
                         if duration_pred is None:
                             raise RuntimeError(
@@ -2784,11 +2936,12 @@ def main() -> None:
                         pred_frames = torch.expm1(duration_pred.float()).clamp_min(0.0)
                         duration_mae_frames = (pred_frames - num_frames.float()).abs().mean()
                         if duration_only:
-                            duration_group_totals = duration_speaker_group_totals(
+                            duration_group_totals = duration_condition_group_totals(
                                 duration_loss_per_sample=duration_loss_per_sample,
                                 pred_frames=pred_frames,
                                 target_frames=num_frames.float(),
                                 has_speaker=has_speaker,
+                                has_caption=has_caption,
                             )
                     if duration_only:
                         loss = duration_loss
@@ -2844,32 +2997,9 @@ def main() -> None:
                             step_duration_group_totals,
                             distributed,
                         )
-                        speaker_count = max(float(duration_group_totals[2].item()), 0.0)
-                        no_speaker_count = max(float(duration_group_totals[5].item()), 0.0)
-                        duration_group_metrics = {
-                            "duration_loss_speaker": (
-                                float(duration_group_totals[0].item() / speaker_count)
-                                if speaker_count > 0.0
-                                else 0.0
-                            ),
-                            "duration_mae_frames_speaker": (
-                                float(duration_group_totals[1].item() / speaker_count)
-                                if speaker_count > 0.0
-                                else 0.0
-                            ),
-                            "duration_samples_speaker": speaker_count,
-                            "duration_loss_no_speaker": (
-                                float(duration_group_totals[3].item() / no_speaker_count)
-                                if no_speaker_count > 0.0
-                                else 0.0
-                            ),
-                            "duration_mae_frames_no_speaker": (
-                                float(duration_group_totals[4].item() / no_speaker_count)
-                                if no_speaker_count > 0.0
-                                else 0.0
-                            ),
-                            "duration_samples_no_speaker": no_speaker_count,
-                        }
+                        duration_group_metrics = duration_condition_group_metrics(
+                            duration_group_totals
+                        )
                     lr_value = current_lr(optimizer)
                     progress_metrics: dict[str, float] = {
                         "loss": loss_value,
@@ -2885,6 +3015,12 @@ def main() -> None:
                             ]
                             progress_metrics["dur_no_sp"] = duration_group_metrics[
                                 "duration_loss_no_speaker"
+                            ]
+                            progress_metrics["dur_cap"] = duration_group_metrics[
+                                "duration_loss_caption"
+                            ]
+                            progress_metrics["dur_no_cap"] = duration_group_metrics[
+                                "duration_loss_no_caption"
                             ]
                     progress.log(
                         step=step,
@@ -2902,13 +3038,11 @@ def main() -> None:
                                 f"dur_mae={duration_mae_frames_value:.2f}"
                             )
                             if duration_only:
-                                message += (
-                                    " "
-                                    f"dur_sp={duration_group_metrics['duration_loss_speaker']:.6f} "
-                                    f"mae_sp={duration_group_metrics['duration_mae_frames_speaker']:.2f} "
-                                    f"dur_no_sp={duration_group_metrics['duration_loss_no_speaker']:.6f} "
-                                    f"mae_no_sp={duration_group_metrics['duration_mae_frames_no_speaker']:.2f}"
+                                group_suffix = duration_condition_group_log_suffix(
+                                    duration_group_metrics
                                 )
+                                if group_suffix:
+                                    message += f" {group_suffix}"
                             progress.write(f"{message} lr={lr_value:.3e}")
                         else:
                             progress.write(
@@ -2926,26 +3060,10 @@ def main() -> None:
                                 metrics["train/duration_mae_frames"] = duration_mae_frames_value
                                 if duration_only:
                                     metrics.update(
-                                        {
-                                            "train/duration_loss_speaker": duration_group_metrics[
-                                                "duration_loss_speaker"
-                                            ],
-                                            "train/duration_mae_frames_speaker": duration_group_metrics[
-                                                "duration_mae_frames_speaker"
-                                            ],
-                                            "train/duration_samples_speaker": duration_group_metrics[
-                                                "duration_samples_speaker"
-                                            ],
-                                            "train/duration_loss_no_speaker": duration_group_metrics[
-                                                "duration_loss_no_speaker"
-                                            ],
-                                            "train/duration_mae_frames_no_speaker": duration_group_metrics[
-                                                "duration_mae_frames_no_speaker"
-                                            ],
-                                            "train/duration_samples_no_speaker": duration_group_metrics[
-                                                "duration_samples_no_speaker"
-                                            ],
-                                        }
+                                        duration_condition_group_wandb_metrics(
+                                            "train",
+                                            duration_group_metrics,
+                                        )
                                     )
                             wandb_run.log(metrics, step=step)
 
@@ -2990,18 +3108,9 @@ def main() -> None:
                                 valid_metrics["duration_mae_frames"],
                             )
                             if duration_only:
-                                message += (
-                                    " "
-                                    "dur_sp={:.6f} mae_sp={:.2f} n_sp={:.0f} "
-                                    "dur_no_sp={:.6f} mae_no_sp={:.2f} n_no_sp={:.0f}"
-                                ).format(
-                                    valid_metrics["duration_loss_speaker"],
-                                    valid_metrics["duration_mae_frames_speaker"],
-                                    valid_metrics["duration_samples_speaker"],
-                                    valid_metrics["duration_loss_no_speaker"],
-                                    valid_metrics["duration_mae_frames_no_speaker"],
-                                    valid_metrics["duration_samples_no_speaker"],
-                                )
+                                group_suffix = duration_condition_group_log_suffix(valid_metrics)
+                                if group_suffix:
+                                    message += f" {group_suffix}"
                             progress.write(
                                 "{} (samples={:.0f})".format(
                                     message,
@@ -3029,26 +3138,10 @@ def main() -> None:
                                 ]
                                 if duration_only:
                                     metrics.update(
-                                        {
-                                            "valid/duration_loss_speaker": valid_metrics[
-                                                "duration_loss_speaker"
-                                            ],
-                                            "valid/duration_mae_frames_speaker": valid_metrics[
-                                                "duration_mae_frames_speaker"
-                                            ],
-                                            "valid/duration_samples_speaker": valid_metrics[
-                                                "duration_samples_speaker"
-                                            ],
-                                            "valid/duration_loss_no_speaker": valid_metrics[
-                                                "duration_loss_no_speaker"
-                                            ],
-                                            "valid/duration_mae_frames_no_speaker": valid_metrics[
-                                                "duration_mae_frames_no_speaker"
-                                            ],
-                                            "valid/duration_samples_no_speaker": valid_metrics[
-                                                "duration_samples_no_speaker"
-                                            ],
-                                        }
+                                        duration_condition_group_wandb_metrics(
+                                            "valid",
+                                            valid_metrics,
+                                        )
                                     )
                             wandb_run.log(metrics, step=step)
                         best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
@@ -3100,18 +3193,9 @@ def main() -> None:
                         valid_metrics["duration_mae_frames"],
                     )
                     if duration_only:
-                        message += (
-                            " "
-                            "dur_sp={:.6f} mae_sp={:.2f} n_sp={:.0f} "
-                            "dur_no_sp={:.6f} mae_no_sp={:.2f} n_no_sp={:.0f}"
-                        ).format(
-                            valid_metrics["duration_loss_speaker"],
-                            valid_metrics["duration_mae_frames_speaker"],
-                            valid_metrics["duration_samples_speaker"],
-                            valid_metrics["duration_loss_no_speaker"],
-                            valid_metrics["duration_mae_frames_no_speaker"],
-                            valid_metrics["duration_samples_no_speaker"],
-                        )
+                        group_suffix = duration_condition_group_log_suffix(valid_metrics)
+                        if group_suffix:
+                            message += f" {group_suffix}"
                     progress.write(
                         "{} (samples={:.0f})".format(
                             message,
@@ -3137,26 +3221,10 @@ def main() -> None:
                         metrics["valid/duration_mae_frames"] = valid_metrics["duration_mae_frames"]
                         if duration_only:
                             metrics.update(
-                                {
-                                    "valid/duration_loss_speaker": valid_metrics[
-                                        "duration_loss_speaker"
-                                    ],
-                                    "valid/duration_mae_frames_speaker": valid_metrics[
-                                        "duration_mae_frames_speaker"
-                                    ],
-                                    "valid/duration_samples_speaker": valid_metrics[
-                                        "duration_samples_speaker"
-                                    ],
-                                    "valid/duration_loss_no_speaker": valid_metrics[
-                                        "duration_loss_no_speaker"
-                                    ],
-                                    "valid/duration_mae_frames_no_speaker": valid_metrics[
-                                        "duration_mae_frames_no_speaker"
-                                    ],
-                                    "valid/duration_samples_no_speaker": valid_metrics[
-                                        "duration_samples_no_speaker"
-                                    ],
-                                }
+                                duration_condition_group_wandb_metrics(
+                                    "valid",
+                                    valid_metrics,
+                                )
                             )
                     wandb_run.log(metrics, step=step)
                 best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(

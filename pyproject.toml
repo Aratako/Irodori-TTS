@@ -20,7 +20,7 @@ dependencies = [
     "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
     "torch>=2.10.0",
     "torchaudio>=2.10.0",
-    "torchcodec>=0.10.0",
+    "torchcodec>=0.10.0,<0.11.0",
     "transformers<5",
     "tqdm>=4.67.3",
     "wandb>=0.17.0",
@@ -32,16 +32,25 @@ dependencies = [
 cpu = [
     "torch>=2.10.0,<2.11.0",
     "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
 ]
 cu128 = [
     "torch>=2.10.0,<2.11.0",
     "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
 ]
 rocm = [
     "torch>=2.10.0,<2.11.0",
     "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
     "pytorch-triton-rocm>=3.5.1; sys_platform == 'linux'",
     "triton-rocm>=3.6.0; sys_platform == 'linux'",
+]
+xpu = [
+    "torch>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchaudio>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchcodec>=0.10.0,<0.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "triton-xpu==3.6.0; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 dev = [
     "ruff>=0.9.0",
@@ -53,6 +62,7 @@ conflicts = [
         { extra = "cpu" },
         { extra = "cu128" },
         { extra = "rocm" },
+        { extra = "xpu" },
     ],
 ]
 
@@ -61,17 +71,22 @@ torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchaudio = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 pytorch-triton-rocm = [
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
 ]
 triton-rocm = [
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+triton-xpu = [
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 dacvae = { git = "https://github.com/facebookresearch/dacvae" }
 
@@ -88,6 +103,11 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-rocm"
 url = "https://download.pytorch.org/whl/rocm7.1"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
 explicit = true
 
 [tool.ruff]

@@ -15,7 +15,37 @@ from .codec import patchify_latent
 from .duration import build_duration_features
 from .tokenizer import PretrainedTextTokenizer
 
-_MANIFEST_INDEX_CACHE_VERSION = 1
+_MANIFEST_INDEX_CACHE_VERSION = 2
+
+
+def _caption_candidates(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        return [text] if text else []
+    if isinstance(raw, list):
+        candidates: list[str] = []
+        for item in raw:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                candidates.append(text)
+        return candidates
+    text = str(raw).strip()
+    return [text] if text else []
+
+
+def _has_caption(raw: Any) -> bool:
+    return bool(_caption_candidates(raw))
+
+
+def _select_caption(raw: Any) -> str:
+    candidates = _caption_candidates(raw)
+    if not candidates:
+        return ""
+    return random.choice(candidates)
 
 
 def _coerce_latent_shape(latent: torch.Tensor, latent_dim: int) -> torch.Tensor:
@@ -168,13 +198,14 @@ class LatentTextDataset(Dataset):
             ref_latent = self._load_latent(ref_item["latent_path"])
         manifest_num_frames = int(item.get("num_frames", latent.shape[0]))
         num_frames = min(manifest_num_frames, int(latent.shape[0]))
+        caption = (
+            _select_caption(item.get(self.caption_key)) if self.enable_caption_condition else ""
+        )
 
         return {
             "text": item["text"],
-            "caption": str(item.get(self.caption_key, "")) if self.enable_caption_condition else "",
-            "has_caption": bool(str(item.get(self.caption_key, "")).strip())
-            if self.enable_caption_condition
-            else False,
+            "caption": caption,
+            "has_caption": bool(caption) if self.enable_caption_condition else False,
             "latent": latent,
             "num_frames": num_frames,
             "ref_latent": ref_latent,
@@ -309,7 +340,7 @@ class _ManifestIndex:
                     offsets.append(offset)
                     speaker_id = item.get("speaker_id")
                     speaker_ids.append(None if speaker_id is None else str(speaker_id))
-                    has_caption.append(bool(str(item.get(caption_key, "")).strip()))
+                    has_caption.append(_has_caption(item.get(caption_key)))
             finally:
                 pbar.close()
         if not offsets:
