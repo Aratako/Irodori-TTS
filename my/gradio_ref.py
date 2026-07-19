@@ -712,18 +712,15 @@ def _run_generation(
         stdout_log(f"[my-ref] saved: {out_path_str}")
 
         # --- DB に書き込み ---
-        # Why: 参照音声版では caption（スタイルプロンプト）を使わないが、
-        #      caption カラムに参照音声のファイル名を記録しておくことで、
-        #      DB 上でどの参照音声を使って生成したかを追跡できるようにする。
-        #      参照音声がない場合は "none" を記録する。
-        ref_caption = Path(ref_wav).name if ref_wav else "none"
+        # Why: ref_wav カラムが新設されたため、参照音声のファイル名は caption カラムではなく
+        #      ref_wav カラムへ直接保存し、caption は None とする。
         insert_generation(
             text=text_value,
-            caption=ref_caption,  # 参照音声のファイル名、なければ "none"
+            caption=None,
             seed=used_seed,
             num_steps=int(num_steps),
             cfg_scale_text=float(cfg_scale_text),
-            cfg_scale_caption=None,  # 参照音声版では cfg_scale_speaker を使うが DB スキーマに列がないため省略
+            cfg_scale_caption=None,
             cfg_scale_speaker=float(cfg_scale_speaker),
             cfg_guidance_mode=str(cfg_guidance_mode),
             checkpoint=str(checkpoint).strip(),
@@ -735,6 +732,7 @@ def _run_generation(
             sway_coeff=locals().get("sway_coeff"),
             lora_adapter=locals().get("lora_adapter"),
             speaker_embedding=locals().get("speaker_embedding"),
+            ref_wav=Path(ref_wav).name if ref_wav else None,
             ui_version=MY_UI_VERSION,
             model_version=guess_model_version(checkpoint),
         )

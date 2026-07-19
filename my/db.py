@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS generations (
     lora_adapter      TEXT,             -- LoRAアダプタのディレクトリパス（v3パラメータ）
     speaker_embedding TEXT,             -- Speaker Inversion の safetensors パス（v3パラメータ）
     cfg_scale_speaker REAL,             -- Speaker 側の CFG Scale（v3パラメータ）
+    ref_wav           TEXT,             -- 参照音声ファイル名（v3パラメータ, 空の場合は NULL）
     ui_version        TEXT,             -- 生成したUIのバージョン
     model_version     TEXT              -- 推定されたモデルのバージョン
 );
@@ -160,6 +161,7 @@ def init_db(db_path: Path | str | None = None) -> Path:
         _ensure_column(conn, "generations", "lora_adapter", "TEXT")
         _ensure_column(conn, "generations", "speaker_embedding", "TEXT")
         _ensure_column(conn, "generations", "cfg_scale_speaker", "REAL")
+        _ensure_column(conn, "generations", "ref_wav", "TEXT")
         _ensure_column(conn, "generations", "ui_version", "TEXT")
         _ensure_column(conn, "generations", "model_version", "TEXT")
 
@@ -202,6 +204,7 @@ def insert_generation(
     lora_adapter: str | None = None,
     speaker_embedding: str | None = None,
     cfg_scale_speaker: float | None = None,
+    ref_wav: str | None = None,
     ui_version: str | None = None,
     model_version: str | None = None,
     db_path: Path | str | None = None,
@@ -231,6 +234,7 @@ def insert_generation(
         lora_adapter:      LoRAアダプタのディレクトリパス（v3パラメータ）
         speaker_embedding: Speaker Inversion の safetensors パス（v3パラメータ）
         cfg_scale_speaker: Speaker 側の CFG Scale（v3パラメータ）
+        ref_wav:           参照音声ファイル名（v3パラメータ）
         ui_version:        生成したUIのバージョン
         model_version:     推定されたモデルのバージョン
         db_path:           DBファイルのパス。None の場合はデフォルト。
@@ -251,8 +255,8 @@ def insert_generation(
                  cfg_scale_text, cfg_scale_caption, cfg_guidance_mode,
                  checkpoint, file_path, filename, duration_scale,
                  seconds, t_schedule_mode, sway_coeff, lora_adapter,
-                 speaker_embedding, cfg_scale_speaker, ui_version, model_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 speaker_embedding, cfg_scale_speaker, ref_wav, ui_version, model_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 created_at,
@@ -273,6 +277,7 @@ def insert_generation(
                 lora_adapter,
                 speaker_embedding,
                 cfg_scale_speaker,
+                ref_wav,
                 ui_version,
                 model_version,
             ),
@@ -336,10 +341,10 @@ def select_generations(
     params: list[Any] = []
 
     if keyword:
-        # text または caption に部分一致する行を検索
-        conditions.append("(text LIKE ? OR caption LIKE ?)")
+        # text または caption または ref_wav に部分一致する行を検索
+        conditions.append("(text LIKE ? OR caption LIKE ? OR ref_wav LIKE ?)")
         like_pattern = f"%{keyword}%"
-        params.extend([like_pattern, like_pattern])
+        params.extend([like_pattern, like_pattern, like_pattern])
 
     if favorite_only:
         conditions.append("favorite = 1")
