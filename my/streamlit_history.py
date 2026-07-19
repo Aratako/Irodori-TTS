@@ -447,9 +447,16 @@ for row in rows:
         )
 
         # キャプション（スタイルプロンプト）
-        if row["caption"]:
+        if row.get("caption"):
             st.markdown(
-                f'<div class="gen-caption">🎨 {row["caption"]}</div>',
+                f'<div class="gen-caption">🎨 スタイル: {row["caption"]}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # 参照音声 (ref_wav)
+        if row.get("ref_wav"):
+            st.markdown(
+                f'<div class="gen-caption">🎧 参照音声: {row["ref_wav"]}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -535,13 +542,22 @@ for row in rows:
                 unsafe_allow_html=True,
             )
         with meta2_cols[2]:
-            st.markdown('<div class="meta-label">🎧 Speaker (CFG / Embed)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="meta-label">🎧 Speaker (CFG / Ref / Embed)</div>', unsafe_allow_html=True)
             spk_cfg = row.get("cfg_scale_speaker")
             spk_embed = row.get("speaker_embedding")
+            spk_ref = row.get("ref_wav")
+            
             spk_cfg_str = f"{spk_cfg:.1f}" if spk_cfg is not None else "—"
-            spk_embed_str = Path(spk_embed).name if spk_embed else "—"
+            
+            if spk_ref:
+                spk_source_str = f"Wav: {spk_ref}"
+            elif spk_embed:
+                spk_source_str = f"Embed: {Path(spk_embed).name}"
+            else:
+                spk_source_str = "—"
+                
             st.markdown(
-                f'<div class="meta-value">CFG: {spk_cfg_str} / {spk_embed_str}</div>',
+                f'<div class="meta-value">CFG: {spk_cfg_str} / {spk_source_str}</div>',
                 unsafe_allow_html=True,
             )
         with meta2_cols[3]:

@@ -56,6 +56,7 @@ from gradio_app_voicedesign import (
     _parse_optional_int,
     _parse_optional_str,
     _precision_choices_for_device,
+    _resolve_ref_wav,
 )
 from irodori_tts.inference_runtime import (
     SamplingRequest,
@@ -448,15 +449,18 @@ def _run_generation(
     enable_watermark: bool,
     text: str,
     caption: str,
+    ref_wav: str | None,
     num_steps: int,
     seed_raw: str,
     cfg_guidance_mode: str,
     cfg_scale_text: float,
     cfg_scale_caption: float,
+    cfg_scale_speaker: float,
     cfg_scale_raw: str,
     cfg_min_t: float,
     cfg_max_t: float,
     context_kv_cache: bool,
+    speaker_kv_scale_raw: str,
     max_text_len_raw: str,
     max_caption_len_raw: str,
     truncation_factor_raw: str,
@@ -519,10 +523,8 @@ def _run_generation(
     truncation_factor = _parse_optional_float(truncation_factor_raw, "truncation_factor")
     rescale_k = _parse_optional_float(rescale_k_raw, "rescale_k")
     rescale_sigma = _parse_optional_float(rescale_sigma_raw, "rescale_sigma")
+    speaker_kv_scale = _parse_optional_float(speaker_kv_scale_raw, "speaker_kv_scale")
     seed = _parse_optional_int(seed_raw, "seed")
-
-    # Why: v3 で追加されたオプショナルパラメータのパースを行う。
-    #      seconds は空欄の場合は None (オート) になり、LoRA アダプタは不要な場合は None になる。
     manual_seconds = _parse_optional_float(seconds_raw, "seconds")
     lora_adapter = _parse_optional_str(lora_adapter_raw)
 
@@ -580,6 +582,8 @@ def _run_generation(
         "t_schedule_mode": str(t_schedule_mode),
         "sway_coeff": float(sway_coeff),
         "lora_adapter_raw": str(lora_adapter_raw),
+        "cfg_scale_speaker": float(cfg_scale_speaker),
+        "speaker_kv_scale_raw": str(speaker_kv_scale_raw),
         "autoplay": bool(autoplay),
     }
     save_last_settings(settings_to_save)
@@ -596,16 +600,14 @@ def _run_generation(
 
         iteration += 1
 
-        runtime, reloaded = get_cached_runtime(runtime_key)
-        if not runtime.model_cfg.use_caption_condition:
-            raise ValueError(
-                "読み込んだチェックポイントは caption conditioning をサポートしていません。"
-                "gradio_app.py を使用してください。"
-            )
-
         stdout_log(
             f"[my-gen] runtime: {'reloaded' if reloaded else 'reused'} (iteration {iteration})"
         )
+
+        ref_wav_path = _resolve_ref_wav(ref_wav)
+        effective_no_ref = ref_wav_path is None or not runtime.model_cfg.use_speaker_condition_resolved
+        if effective_no_ref:
+            ref_wav_path = None
 
         # --- Live Update: プロンプトの最新値を取得 ---
         # Why: Generate Forever ループ中にユーザーが text や caption を変更した場合、
@@ -625,9 +627,9 @@ def _run_generation(
             SamplingRequest(
                 text=text_value,
                 caption=caption_value or None,
-                ref_wav=None,
+                ref_wav=ref_wav_path,
                 ref_latent=None,
-                no_ref=True,
+                no_ref=effective_no_ref,
                 ref_normalize_db=-16.0,
                 ref_ensure_max=True,
                 num_candidates=1,  # 常に1件だけ生成（候補グリッド廃止）
@@ -643,7 +645,7 @@ def _run_generation(
                 cfg_guidance_mode=str(cfg_guidance_mode),
                 cfg_scale_text=float(cfg_scale_text),
                 cfg_scale_caption=float(cfg_scale_caption),
-                cfg_scale_speaker=0.0,
+                cfg_scale_speaker=0.0 if effective_no_ref else float(cfg_scale_speaker),
                 cfg_scale=cfg_scale,
                 cfg_min_t=float(cfg_min_t),
                 cfg_max_t=float(cfg_max_t),
@@ -651,7 +653,7 @@ def _run_generation(
                 rescale_k=rescale_k,
                 rescale_sigma=rescale_sigma,
                 context_kv_cache=bool(context_kv_cache),
-                speaker_kv_scale=None,
+                speaker_kv_scale=None if effective_no_ref else speaker_kv_scale,
                 speaker_kv_min_t=None,
                 speaker_kv_max_layers=None,
                 # Why: 時間スケジュールモード（swayなど）、その係数、および LoRA アダプタディレクトリを渡す。
@@ -698,6 +700,8 @@ def _run_generation(
             t_schedule_mode=locals().get("t_schedule_mode"),
             sway_coeff=locals().get("sway_coeff"),
             lora_adapter=locals().get("lora_adapter"),
+            ref_wav=Path(ref_wav_path).name if ref_wav_path else None,
+            cfg_scale_speaker=locals().get("cfg_scale_speaker"),
             ui_version=MY_UI_VERSION,
             model_version=guess_model_version(checkpoint),
         )
@@ -896,6 +900,10 @@ def build_ui() -> gr.Blocks:
             lines=4,
             value=last_settings.get("caption", ""),
         )
+        ref_wav = gr.Audio(
+            label="Reference Audio Upload (optional, blank = no-reference mode)",
+            type="filepath",
+        )
 
         # -------------------------------------------------------------------
         # 4. キュー再生プレイヤー & 直近の生成結果
@@ -1014,6 +1022,13 @@ def build_ui() -> gr.Blocks:
                     value=last_settings.get("cfg_scale_caption", 4.0),
                     step=0.1,
                 )
+                cfg_scale_speaker = gr.Slider(
+                    label="CFG Scale Speaker",
+                    minimum=0.0,
+                    maximum=10.0,
+                    value=last_settings.get("cfg_scale_speaker", 5.0),
+                    step=0.1,
+                )
 
         # -------------------------------------------------------------------
         # 6. 詳細設定（初期状態で閉じたアコーディオン）
@@ -1048,11 +1063,16 @@ def build_ui() -> gr.Blocks:
                     label="Rescale sigma (optional)",
                     value=last_settings.get("rescale_sigma_raw", ""),
                 )
-            # Why: 学習済みの追加話者スタイル (LoRA) を適用可能にするため、アダプタディレクトリのパス入力欄を設ける。
-            lora_adapter_raw = gr.Textbox(
-                label="LoRA Adapter Directory (optional)",
-                value=last_settings.get("lora_adapter_raw", ""),
-            )
+            with gr.Row():
+                speaker_kv_scale_raw = gr.Textbox(
+                    label="Speaker KV Scale (optional)",
+                    value=last_settings.get("speaker_kv_scale_raw", ""),
+                )
+                # Why: 学習済みの追加話者スタイル (LoRA) を適用可能にするため、アダダプタディレクトリのパス入力欄を設ける。
+                lora_adapter_raw = gr.Textbox(
+                    label="LoRA Adapter Directory (optional)",
+                    value=last_settings.get("lora_adapter_raw", ""),
+                )
 
         # -------------------------------------------------------------------
         # 7. モデル設定行（めったに変更しない）
@@ -1113,6 +1133,50 @@ def build_ui() -> gr.Blocks:
         #      Generate Forever ボタン → forever=True（連続生成）
         forever_false = gr.State(False)
         forever_true = gr.State(True)
+
+        # --- 共通の入力リスト ---
+        # Why: Generate ボタンと Generate Forever ボタンで共通する入力パラメータを
+        #      まとめて定義し、コードの重複を避ける。
+        #      forever パラメータだけがボタンごとに異なる。
+        def _make_inputs(forever_state: gr.State) -> list:
+            """
+            ボタンごとに異なる forever State を含む入力リストを生成する。
+            """
+            return [
+                checkpoint,
+                model_device,
+                model_precision,
+                codec_device,
+                codec_precision,
+                enable_watermark,
+                text,
+                caption,
+                ref_wav,
+                num_steps,
+                seed_raw,
+                cfg_guidance_mode,
+                cfg_scale_text,
+                cfg_scale_caption,
+                cfg_scale_speaker,
+                cfg_scale_raw,
+                cfg_min_t,
+                cfg_max_t,
+                context_kv_cache,
+                speaker_kv_scale_raw,
+                max_text_len_raw,
+                max_caption_len_raw,
+                truncation_factor_raw,
+                rescale_k_raw,
+                rescale_sigma_raw,
+                seconds_raw,
+                duration_scale,
+                t_schedule_mode,
+                sway_coeff,
+                lora_adapter_raw,
+                autoplay,
+                forever_state,
+                history_state,
+            ]
 
         # 出力リスト（Audio×5 + ログ + タイミング + 履歴State + スピナー + 新規キューパス）
         gen_outputs = [
@@ -1319,15 +1383,18 @@ def build_ui() -> gr.Blocks:
                 s.get("codec_precision", codec_precision_choices[0]),
                 s.get("text", ""),
                 s.get("caption", ""),
+                None, # ref_wav はファイルアップロードなので None 初期化
                 s.get("num_steps", 40),
                 s.get("seed_raw", ""),
                 s.get("cfg_guidance_mode", "independent"),
                 s.get("cfg_scale_text", 2.0),
                 s.get("cfg_scale_caption", 4.0),
+                s.get("cfg_scale_speaker", 5.0),
                 s.get("cfg_scale_raw", ""),
                 s.get("cfg_min_t", 0.5),
                 s.get("cfg_max_t", 1.0),
                 s.get("context_kv_cache", True),
+                s.get("speaker_kv_scale_raw", ""),
                 s.get("max_text_len_raw", ""),
                 s.get("max_caption_len_raw", ""),
                 s.get("truncation_factor_raw", ""),
@@ -1354,15 +1421,18 @@ def build_ui() -> gr.Blocks:
                 codec_precision,
                 text,
                 caption,
+                ref_wav,
                 num_steps,
                 seed_raw,
                 cfg_guidance_mode,
                 cfg_scale_text,
                 cfg_scale_caption,
+                cfg_scale_speaker,
                 cfg_scale_raw,
                 cfg_min_t,
                 cfg_max_t,
                 context_kv_cache,
+                speaker_kv_scale_raw,
                 max_text_len_raw,
                 max_caption_len_raw,
                 truncation_factor_raw,
