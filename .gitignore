@@ -219,3 +219,8 @@ gradio_outputs/
 gradio_outputs_voicedesign/
 outputs/
 data/
+
+# Local voice assets and generated audio
+reference/
+outputs/
+gradio_outputs/
