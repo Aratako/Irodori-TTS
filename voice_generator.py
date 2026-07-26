@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from voice_engine import VoiceEngine
@@ -7,13 +8,23 @@ from voice_engine import VoiceEngine
 
 BASE_DIR = Path(__file__).resolve().parent
 
-REFERENCE_AUDIO = BASE_DIR / "reference" / "character_B.wav"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Irodori-TTS 音声生成プログラム"
+    )
+    parser.add_argument(
+        "--reference-audio",
+        required=True,
+        type=Path,
+        help="参照音声ファイルのパス",
+    )
+    args = parser.parse_args()
+
     engine = VoiceEngine(
-        reference_audio=REFERENCE_AUDIO,
+        reference_audio=args.reference_audio,
         output_dir=OUTPUT_DIR,
     )
 
@@ -36,7 +47,7 @@ def main() -> None:
     print(" Irodori-TTS 音声生成プログラム")
     print("========================================")
     print("読み上げたい文章を入力してください。")
-    print("終了するときは exit と入力します。")
+    print("終了するときは exit と入力してください。")
 
     while True:
         print()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from character_profile_loader import load_character_profile
+from character_profile_loader import load_character_config
 from llm_config import LLMConfig
 from openai_conversation_engine import OpenAIConversationEngine
 from voice_engine import VoiceEngine
@@ -11,13 +11,13 @@ from voice_engine import VoiceEngine
 BASE_DIR = Path(__file__).resolve().parent
 
 CHARACTER_PROFILE_PATH = BASE_DIR / "character_profile.json"
-REFERENCE_AUDIO = BASE_DIR / "reference" / "character_B.wav"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 
 def main() -> None:
     try:
-        profile = load_character_profile(CHARACTER_PROFILE_PATH)
+        character_config = load_character_config(CHARACTER_PROFILE_PATH)
+        profile = character_config.profile
         llm_config = LLMConfig.from_environment()
 
         conversation_engine = OpenAIConversationEngine(
@@ -32,7 +32,7 @@ def main() -> None:
         return
 
     voice_engine = VoiceEngine(
-        reference_audio=REFERENCE_AUDIO,
+        reference_audio=character_config.voice.reference_audio,
         output_dir=OUTPUT_DIR,
     )
 
