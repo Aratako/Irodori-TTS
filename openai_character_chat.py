@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conversation_engine import CharacterProfile
+from character_profile_loader import load_character_profile
 from llm_config import LLMConfig
 from openai_conversation_engine import OpenAIConversationEngine
 from voice_engine import VoiceEngine
@@ -10,25 +10,14 @@ from voice_engine import VoiceEngine
 
 BASE_DIR = Path(__file__).resolve().parent
 
+CHARACTER_PROFILE_PATH = BASE_DIR / "character_profile.json"
 REFERENCE_AUDIO = BASE_DIR / "reference" / "character_B.wav"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 
-def create_character_profile() -> CharacterProfile:
-    """現在使用するキャラクター設定を作成する。"""
-
-    return CharacterProfile(
-        name="テストキャラクター",
-        first_person="私",
-        personality="明るく親しみやすく、相手を優しく励ます",
-        speaking_style="柔らかく自然な口調で、短く話す",
-    )
-
-
 def main() -> None:
-    profile = create_character_profile()
-
     try:
+        profile = load_character_profile(CHARACTER_PROFILE_PATH)
         llm_config = LLMConfig.from_environment()
 
         conversation_engine = OpenAIConversationEngine(

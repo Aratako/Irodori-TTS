@@ -224,3 +224,6 @@ data/
 reference/
 outputs/
 gradio_outputs/
+
+# Local character configuration
+character_profile.json
