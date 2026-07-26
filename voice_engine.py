@@ -90,7 +90,11 @@ class VoiceEngine:
             )
         )
 
-    def generate(self, text: str) -> VoiceGenerationResult:
+    def generate(
+        self,
+        text: str,
+        reference_audio: str | Path | None = None,
+    ) -> VoiceGenerationResult:
         """入力された文章から音声を生成して保存する。"""
 
         cleaned_text = text.strip()
@@ -104,10 +108,22 @@ class VoiceEngine:
                 "先にload()を実行してください。"
             )
 
+        active_reference_audio = (
+            Path(reference_audio)
+            if reference_audio is not None
+            else self.reference_audio
+        )
+
+        if not active_reference_audio.is_file():
+            raise FileNotFoundError(
+                "参照音声ファイルが見つかりません。\n"
+                f"確認する場所: {active_reference_audio}"
+            )
+
         result = self._runtime.synthesize(
             SamplingRequest(
                 text=cleaned_text,
-                ref_wav=str(self.reference_audio),
+                ref_wav=str(active_reference_audio),
 
                 num_steps=16,
                 t_schedule_mode="sway",
