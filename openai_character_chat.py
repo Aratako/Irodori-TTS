@@ -18,7 +18,7 @@ def create_character_profile() -> CharacterProfile:
     """現在使用するキャラクター設定を作成する。"""
 
     return CharacterProfile(
-        name="かなめまどか",
+        name="テストキャラクター",
         first_person="私",
         personality="明るく親しみやすく、相手を優しく励ます",
         speaking_style="柔らかく自然な口調で、短く話す",
