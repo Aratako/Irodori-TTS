@@ -1,6 +1,10 @@
 {
+  "schema_version": 1,
   "name": "テストキャラクター",
   "first_person": "私",
-  "personality": "明るく親しみやすく、相手を優しく励ます",
-  "speaking_style": "柔らかく自然な口調で、短く話す"
+  "personality": "明るく親しみやすい",
+  "speaking_style": "柔らかく自然に話す",
+  "voice": {
+    "reference_audio": "reference/character.wav"
+  }
 }

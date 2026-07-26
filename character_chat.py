@@ -2,34 +2,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conversation_engine import CharacterProfile, ConversationEngine
+from character_profile_loader import load_character_config
+from conversation_engine import ConversationEngine
 from voice_engine import VoiceEngine
 
 
 BASE_DIR = Path(__file__).resolve().parent
 
-REFERENCE_AUDIO = BASE_DIR / "reference" / "character_B.wav"
+CHARACTER_PROFILE_PATH = BASE_DIR / "character_profile.json"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 
-def create_character_profile() -> CharacterProfile:
-    """現在使用するキャラクター設定を作成する。"""
-
-    return CharacterProfile(
-        name="テストキャラクター",
-        first_person="私",
-        personality="明るく親しみやすい",
-        speaking_style="短く自然に話す",
-    )
-
-
 def main() -> None:
-    profile = create_character_profile()
+    try:
+        character_config = load_character_config(CHARACTER_PROFILE_PATH)
+        profile = character_config.profile
+
+    except Exception as error:
+        print()
+        print("キャラクター設定の読み込みに失敗しました。")
+        print(f"エラー: {error}")
+        return
 
     conversation_engine = ConversationEngine(profile)
 
     voice_engine = VoiceEngine(
-        reference_audio=REFERENCE_AUDIO,
+        reference_audio=character_config.voice.reference_audio,
         output_dir=OUTPUT_DIR,
     )
 
@@ -52,7 +50,7 @@ def main() -> None:
     print(" キャラクター会話プログラム")
     print("========================================")
     print(f"会話相手: {profile.name}")
-    print("終了するときは exit と入力します。")
+    print("終了するときは exit と入力してください。")
 
     while True:
         print()
@@ -70,7 +68,7 @@ def main() -> None:
             reply = conversation_engine.generate_reply(user_text)
 
             print(f"{profile.name} > {reply}")
-            print("返答音声を生成しています...")
+            print("返信音声を生成しています...")
 
             result = voice_engine.generate(reply)
 
