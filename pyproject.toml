@@ -24,6 +24,7 @@ dependencies = [
     "transformers<5",
     "tqdm>=4.67.3",
     "wandb>=0.17.0",
+    "openai>=2.48.0",
 ]
 
 [project.optional-dependencies]
