@@ -169,6 +169,155 @@ The hosted VoiceDesign demo is available at [Aratako/Irodori-TTS-600M-v3-VoiceDe
 
 `gradio_app.py` is for `Aratako/Irodori-TTS-500M-v3`. `gradio_app_voicedesign.py` is for `Aratako/Irodori-TTS-600M-v3-VoiceDesign` and remains compatible with v2 VoiceDesign checkpoints.
 
+### OpenAI Character Chat MVP
+
+This local MVP lets you talk with a configured character in a Gradio UI. OpenAI
+generates the character reply, Irodori-TTS generates the reply voice from a
+reference audio file, and OpenAI transcription can convert microphone input to
+Japanese text before you send it.
+
+#### 主な機能
+
+- OpenAI APIによる日本語キャラクター会話
+- Irodori-TTSによる返答音声の生成
+- キャラクター名、一人称、性格、話し方、参照音声のローカル設定
+- テキスト入力とマイク録音からの文字起こし
+- GradioによるローカルWeb UI
+
+#### Windows CMDでのセットアップ
+
+Windowsのコマンドプロンプトで実行します。すでにこのリポジトリをclone済みの場合は、`git clone`と`cd Irodori-TTS`を飛ばして、リポジトリのフォルダで作業してください。
+
+```bat
+git clone https://github.com/aotogonov15-dotcom/Irodori-TTS.git
+cd Irodori-TTS
+uv sync --extra cu128
+copy character_profile.example.json character_profile.json
+```
+
+CUDA 12.8環境では`uv sync --extra cu128`を使用します。依存関係の同期後は、PyTorch backend extraを付け直して再同期しないように、起動コマンドでは`uv run --no-sync ...`を使用します。
+
+参照音声を置く`reference`フォルダが存在しない場合だけ、次のコマンドで作成できます。
+
+```bat
+mkdir reference
+```
+
+#### キャラクター設定
+
+実際にアプリが読み込むファイルは`character_profile.json`です。`character_profile.example.json`は公開用テンプレートなので、コピーしてから自分用の内容に編集します。
+
+設定する主な項目は次のとおりです。
+
+- `name`: キャラクター名
+- `first_person`: 一人称
+- `personality`: 性格
+- `speaking_style`: 話し方
+- `voice.reference_audio`: 参照音声ファイルへの相対パス
+
+参照音声は、リポジトリ内の相対パスで指定します。
+
+```json
+"voice": {
+  "reference_audio": "reference/character.wav"
+}
+```
+
+`voice.reference_audio`には絶対パスや`../`を使用しないでください。個人用キャラクター情報や第三者の音声を公開リポジトリへ追加しないでください。
+
+#### OpenAI環境変数
+
+OpenAI APIキーは環境変数で設定します。実際のAPIキーをREADME、ソースコード、JSON、スクリーンショットへ載せないでください。
+
+```bat
+set "OPENAI_API_KEY=YOUR_OPENAI_API_KEY"
+```
+
+`set`で設定した値は現在のCMDだけで有効です。CMDを閉じると環境変数も失われます。`OPENAI_API_KEY`が未設定の場合、アプリは起動できません。
+
+会話モデルと文字起こしモデルは任意で変更できます。未設定の場合も、現在の既定値は次と同じです。
+
+```bat
+set "OPENAI_MODEL=gpt-5-mini"
+set "OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe"
+```
+
+#### 起動方法
+
+APIキーを設定した同じCMDで、次のコマンドを実行します。
+
+```bat
+uv run --no-sync python gradio_openai_character_chat.py --server-name 127.0.0.1 --server-port 7862
+```
+
+起動中のCMDは閉じないでください。CMDを閉じるとGradioアプリも停止し、ブラウザから接続できなくなります。
+
+起動後、ブラウザで次を開きます。
+
+```text
+http://127.0.0.1:7862
+```
+
+アプリを終了するときは、起動中のCMDで`Ctrl + C`を押します。
+
+#### 基本的な使い方
+
+1. キャラクター設定と参照音声を確認する
+2. 必要に応じて設定を変更して「設定を反映」を押す
+3. テキスト入力またはマイク録音を使用する
+4. マイクの場合は「文字起こし」を押す
+5. 入力欄へ入った内容を確認・修正する
+6. 「送信」またはEnterで送信する
+7. 生成された返答音声が自動再生される
+8. 「会話クリア」で履歴を消せる
+
+文字起こし後は自動送信されません。文字起こし結果は入力欄に入るので、内容を確認・修正してから送信してください。設定反映時は会話履歴と生成音声がクリアされます。生成音声だけが自動再生され、マイク録音や参照音声は自動再生されません。
+
+#### 主な関連ファイル
+
+- `gradio_openai_character_chat.py`: Gradio UIの入口
+- `llm_config.py`: OpenAI APIキー、会話モデル、文字起こしモデルの環境変数設定
+- `openai_conversation_engine.py`: OpenAI APIでキャラクター返答を生成
+- `openai_transcription_engine.py`: マイク録音を日本語テキストへ文字起こし
+- `voice_engine.py`: Irodori-TTSモデルの読み込みと返答音声生成
+- `character_profile_loader.py`: `character_profile.json`の読み込みと検証
+- `character_profile.example.json`: 公開用キャラクター設定テンプレート
+- `tests/`: キャラクター設定、Gradio UI、文字起こし、音声生成の単体テスト
+
+#### Git管理しないファイル
+
+次のファイルやフォルダはローカル用です。Gitへ追加しないでください。
+
+- `character_profile.json`
+- `reference/`
+- `outputs/`
+- `gradio_outputs/`
+- `.env`
+- `.venv/`
+- Gradioが作成する一時的な録音ファイル
+
+#### よくある問題
+
+- `OPENAI_API_KEY`が未設定: APIキーを設定した同じCMDで起動してください。
+- `character_profile.json`が存在しない: `copy character_profile.example.json character_profile.json`で作成してください。
+- 参照音声のパスが不正: `voice.reference_audio`はリポジトリ内の相対パスにし、絶対パスや`../`を使わないでください。
+- 参照音声が存在しない、空、未対応形式: ファイルの場所と中身を確認してください。対応拡張子は`.wav`、`.mp3`、`.flac`、`.ogg`、`.m4a`です。
+- マイクを録音せず文字起こしを押した: 録音してから「文字起こし」を押してください。
+- ブラウザのマイク権限が拒否されている: ブラウザのサイト設定でマイク権限を許可してください。
+- OpenAI API接続に失敗した: インターネット接続、APIキー、OpenAI APIの利用状況を確認してください。
+- 初回起動時のモデルダウンロードに時間がかかる: `Aratako/Irodori-TTS-500M-v3`のモデルをHugging Faceから取得するため、初回は待ち時間が発生します。
+- CMDを閉じたためブラウザへ接続できなくなった: もう一度起動コマンドを実行し、起動中のCMDを開いたままにしてください。
+- CUDA 12.8用の依存関係が入っていない: `uv sync --extra cu128`を実行してから、`uv run --no-sync ...`で起動してください。
+
+#### 安全上の注意
+
+- APIキーをGitへ追加しない
+- `character_profile.json`をGitへ追加しない
+- 参照音声、録音音声、生成音声をGitへ追加しない
+- 第三者キャラクターの音声、画像、台詞を、権利者の許可なく公開・配布しない
+- 現在のMVPはローカル利用を前提としている
+- 公開や配布時には権利とセキュリティを再確認する
+
 ## Inference
 
 ### CLI
