@@ -4,10 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import gradio as gr
+
 from gradio_openai_character_chat import (
     AppResources,
     _apply_session_settings,
     _validate_session_settings,
+    build_ui,
 )
 
 
@@ -124,6 +127,28 @@ class GradioCharacterSettingsTest(unittest.TestCase):
             self.assertEqual(history_state, [])
             self.assertIsNone(audio_update["value"])
             self.assertIn("設定を反映", status)
+
+    def test_build_ui_enables_autoplay_only_for_generated_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "reference.wav")
+            demo = build_ui(self._resources(audio_path))
+            audio_components = [
+                component
+                for component in demo.blocks.values()
+                if isinstance(component, gr.Audio)
+            ]
+
+            self.assertEqual(len(audio_components), 2)
+
+            reference_audio = next(
+                component for component in audio_components if component.interactive
+            )
+            generated_audio = next(
+                component for component in audio_components if not component.interactive
+            )
+
+            self.assertFalse(reference_audio.autoplay)
+            self.assertTrue(generated_audio.autoplay)
 
     def _resources(self, audio_path: Path) -> AppResources:
         return AppResources(

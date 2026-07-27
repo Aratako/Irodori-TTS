@@ -493,6 +493,7 @@ def build_ui(resources: AppResources) -> gr.Blocks:
             label="生成音声",
             type="filepath",
             interactive=False,
+            autoplay=True,
         )
         status = gr.Textbox(
             label="状態",
