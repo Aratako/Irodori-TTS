@@ -6,8 +6,10 @@ from dataclasses import dataclass, field
 
 API_KEY_ENV_NAME = "OPENAI_API_KEY"
 MODEL_ENV_NAME = "OPENAI_MODEL"
+TRANSCRIPTION_MODEL_ENV_NAME = "OPENAI_TRANSCRIPTION_MODEL"
 
 DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 DEFAULT_MAX_HISTORY_TURNS = 8
 DEFAULT_MAX_OUTPUT_TOKENS = 200
 
@@ -18,6 +20,7 @@ class LLMConfig:
 
     api_key: str = field(repr=False)
     model: str = DEFAULT_MODEL
+    transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL
     max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -27,6 +30,10 @@ class LLMConfig:
 
         api_key = os.getenv(API_KEY_ENV_NAME, "").strip()
         model = os.getenv(MODEL_ENV_NAME, DEFAULT_MODEL).strip()
+        transcription_model = os.getenv(
+            TRANSCRIPTION_MODEL_ENV_NAME,
+            DEFAULT_TRANSCRIPTION_MODEL,
+        ).strip()
 
         if not api_key:
             raise RuntimeError(
@@ -40,9 +47,15 @@ class LLMConfig:
                 f"環境変数 {MODEL_ENV_NAME} の値が空です。"
             )
 
+        if not transcription_model:
+            raise RuntimeError(
+                f"環境変数 {TRANSCRIPTION_MODEL_ENV_NAME} の値が空です。"
+            )
+
         return cls(
             api_key=api_key,
             model=model,
+            transcription_model=transcription_model,
         )
 
     def validate(self) -> None:
@@ -56,4 +69,9 @@ class LLMConfig:
         if self.max_output_tokens <= 0:
             raise ValueError(
                 "max_output_tokensは1以上にしてください。"
+            )
+
+        if not self.transcription_model.strip():
+            raise ValueError(
+                "transcription_modelは空にできません。"
             )
