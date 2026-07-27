@@ -11,6 +11,7 @@ from character_profile_loader import load_character_config
 from conversation_engine import CharacterProfile, ConversationTurn
 from llm_config import LLMConfig
 from openai_conversation_engine import OpenAIConversationEngine
+from openai_transcription_engine import OpenAITranscriptionEngine
 from voice_engine import VoiceEngine
 
 
@@ -37,6 +38,7 @@ SUPPORTED_REFERENCE_AUDIO_EXTENSIONS = {
 class AppResources:
     llm_config: LLMConfig
     voice_engine: VoiceEngine
+    transcription_engine: OpenAITranscriptionEngine
     initial_settings: SessionSettings
 
 
@@ -66,6 +68,7 @@ def _load_resources() -> AppResources:
     return AppResources(
         llm_config=llm_config,
         voice_engine=voice_engine,
+        transcription_engine=OpenAITranscriptionEngine(llm_config),
         initial_settings=_create_session_settings(
             character_config.profile,
             character_config.voice.reference_audio,
@@ -349,12 +352,41 @@ def _submit_message(
     )
 
 
-def _clear_conversation() -> tuple[list[ChatMessage], list[HistoryItem], object, str]:
+def _clear_conversation() -> tuple[
+    list[ChatMessage],
+    list[HistoryItem],
+    object,
+    object,
+    str,
+]:
     return (
         [],
         [],
         gr.update(value=None),
+        gr.update(value=None),
         "会話履歴をクリアしました。",
+    )
+
+
+def _transcribe_microphone_audio(
+    microphone_audio: str | Path | None,
+    current_user_text: str,
+    resources: AppResources,
+) -> tuple[str, str]:
+    previous_text = str(current_user_text or "")
+
+    try:
+        transcribed_text = resources.transcription_engine.transcribe(microphone_audio)
+
+    except Exception as error:
+        return (
+            previous_text,
+            f"文字起こしに失敗しました: {error}",
+        )
+
+    return (
+        transcribed_text,
+        "文字起こししました。内容を確認・修正してから送信してください。",
     )
 
 
@@ -371,6 +403,7 @@ def _apply_session_settings(
     SessionSettings,
     list[ChatMessage],
     list[HistoryItem],
+    object,
     object,
     str,
 ]:
@@ -392,6 +425,7 @@ def _apply_session_settings(
             _build_chat_messages(current_history),
             _turns_to_history_state(current_history),
             gr.update(),
+            gr.update(),
             f"設定を反映できませんでした: {error}",
         )
 
@@ -399,6 +433,7 @@ def _apply_session_settings(
         updated_settings,
         [],
         [],
+        gr.update(value=None),
         gr.update(value=None),
         "設定を反映しました。会話履歴と生成音声をクリアしました。",
     )
@@ -441,6 +476,16 @@ def build_ui(resources: AppResources) -> gr.Blocks:
                 settings=settings,
                 history=history,
                 resources=resources,
+            )
+
+        def transcribe_microphone_audio(
+            microphone_audio: str | Path | None,
+            current_user_text: str,
+        ) -> tuple[str, str]:
+            return _transcribe_microphone_audio(
+                microphone_audio,
+                current_user_text,
+                resources,
             )
 
         with gr.Accordion("キャラクター設定", open=True):
@@ -488,6 +533,16 @@ def build_ui(resources: AppResources) -> gr.Blocks:
                 scale=5,
             )
             send_button = gr.Button("送信", variant="primary", scale=1)
+
+        with gr.Row():
+            microphone_audio = gr.Audio(
+                label="マイク録音",
+                sources=["microphone"],
+                type="filepath",
+                interactive=True,
+                scale=5,
+            )
+            transcribe_button = gr.Button("文字起こし", scale=1)
 
         generated_audio = gr.Audio(
             label="生成音声",
@@ -549,6 +604,18 @@ def build_ui(resources: AppResources) -> gr.Blocks:
                 chatbot,
                 chat_history,
                 generated_audio,
+                microphone_audio,
+                status,
+            ],
+        )
+        transcribe_button.click(
+            transcribe_microphone_audio,
+            inputs=[
+                microphone_audio,
+                user_input,
+            ],
+            outputs=[
+                user_input,
                 status,
             ],
         )
@@ -558,6 +625,7 @@ def build_ui(resources: AppResources) -> gr.Blocks:
                 chatbot,
                 chat_history,
                 generated_audio,
+                microphone_audio,
                 status,
             ],
         )

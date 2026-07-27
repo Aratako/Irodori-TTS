@@ -9,6 +9,8 @@ import gradio as gr
 from gradio_openai_character_chat import (
     AppResources,
     _apply_session_settings,
+    _clear_conversation,
+    _transcribe_microphone_audio,
     _validate_session_settings,
     build_ui,
 )
@@ -111,7 +113,14 @@ class GradioCharacterSettingsTest(unittest.TestCase):
                 }
             ]
 
-            settings, chat_messages, history_state, audio_update, status = _apply_session_settings(
+            (
+                settings,
+                chat_messages,
+                history_state,
+                audio_update,
+                microphone_update,
+                status,
+            ) = _apply_session_settings(
                 name="テスト",
                 first_person="私",
                 personality="明るい",
@@ -126,6 +135,7 @@ class GradioCharacterSettingsTest(unittest.TestCase):
             self.assertEqual(chat_messages, [])
             self.assertEqual(history_state, [])
             self.assertIsNone(audio_update["value"])
+            self.assertIsNone(microphone_update["value"])
             self.assertIn("設定を反映", status)
 
     def test_build_ui_enables_autoplay_only_for_generated_audio(self) -> None:
@@ -138,22 +148,101 @@ class GradioCharacterSettingsTest(unittest.TestCase):
                 if isinstance(component, gr.Audio)
             ]
 
-            self.assertEqual(len(audio_components), 2)
+            self.assertEqual(len(audio_components), 3)
 
             reference_audio = next(
-                component for component in audio_components if component.interactive
+                component
+                for component in audio_components
+                if component.sources == ["upload"]
+            )
+            microphone_audio = next(
+                component
+                for component in audio_components
+                if component.sources == ["microphone"]
             )
             generated_audio = next(
                 component for component in audio_components if not component.interactive
             )
 
             self.assertFalse(reference_audio.autoplay)
+            self.assertFalse(microphone_audio.autoplay)
             self.assertTrue(generated_audio.autoplay)
+
+    def test_transcription_result_is_written_to_user_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "recording.wav")
+            resources = self._resources(audio_path)
+
+            user_input, status = _transcribe_microphone_audio(
+                str(audio_path),
+                "既存の入力",
+                resources,
+            )
+
+            self.assertEqual(user_input, "文字起こし結果")
+            self.assertIn("確認・修正", status)
+            self.assertEqual(resources.transcription_engine.calls, [str(audio_path)])
+
+    def test_transcription_failure_keeps_existing_user_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "recording.wav")
+            resources = self._resources(audio_path)
+            resources.transcription_engine = FakeTranscriptionEngine(
+                error=RuntimeError("安全なエラー")
+            )
+
+            user_input, status = _transcribe_microphone_audio(
+                str(audio_path),
+                "消さない入力",
+                resources,
+            )
+
+            self.assertEqual(user_input, "消さない入力")
+            self.assertIn("文字起こしに失敗しました", status)
+
+    def test_clear_conversation_clears_microphone_audio(self) -> None:
+        chat_messages, history_state, audio_update, microphone_update, status = (
+            _clear_conversation()
+        )
+
+        self.assertEqual(chat_messages, [])
+        self.assertEqual(history_state, [])
+        self.assertIsNone(audio_update["value"])
+        self.assertIsNone(microphone_update["value"])
+        self.assertIn("会話履歴をクリア", status)
+
+    def test_transcribe_button_does_not_submit_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "reference.wav")
+            demo = build_ui(self._resources(audio_path))
+            components_by_label = {
+                component.label: component
+                for component in demo.blocks.values()
+                if hasattr(component, "label")
+            }
+            user_input = components_by_label["あなたの文章"]
+            status = components_by_label["状態"]
+            chatbot = components_by_label["キャラクターとの会話"]
+            generated_audio = components_by_label["生成音声"]
+
+            transcribe_dependency = next(
+                dependency
+                for dependency in demo.config["dependencies"]
+                if dependency["api_name"] == "transcribe_microphone_audio"
+            )
+
+            self.assertEqual(
+                transcribe_dependency["outputs"],
+                [user_input._id, status._id],
+            )
+            self.assertNotIn(chatbot._id, transcribe_dependency["outputs"])
+            self.assertNotIn(generated_audio._id, transcribe_dependency["outputs"])
 
     def _resources(self, audio_path: Path) -> AppResources:
         return AppResources(
             llm_config=object(),
             voice_engine=object(),
+            transcription_engine=FakeTranscriptionEngine(),
             initial_settings={
                 "name": "初期",
                 "first_person": "私",
@@ -166,6 +255,20 @@ class GradioCharacterSettingsTest(unittest.TestCase):
     def _write_audio(self, path: Path) -> Path:
         path.write_bytes(b"dummy wav")
         return path
+
+
+class FakeTranscriptionEngine:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = []
+
+    def transcribe(self, audio_path: str | Path | None) -> str:
+        self.calls.append(audio_path)
+
+        if self.error:
+            raise self.error
+
+        return "文字起こし結果"
 
 
 if __name__ == "__main__":
