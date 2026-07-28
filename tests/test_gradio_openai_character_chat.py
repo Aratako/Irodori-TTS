@@ -11,6 +11,7 @@ from gradio_openai_character_chat import (
     _apply_session_settings,
     _clear_conversation,
     _transcribe_microphone_audio,
+    _transcribe_microphone_audio_with_status,
     _validate_session_settings,
     build_ui,
 )
@@ -199,6 +200,58 @@ class GradioCharacterSettingsTest(unittest.TestCase):
 
             self.assertEqual(user_input, "消さない入力")
             self.assertIn("文字起こしに失敗しました", status)
+
+    def test_transcription_status_generator_first_yield_keeps_existing_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "recording.wav")
+            resources = self._resources(audio_path)
+
+            generator = _transcribe_microphone_audio_with_status(
+                str(audio_path),
+                "既存の入力",
+                resources,
+            )
+
+            self.assertEqual(next(generator), ("既存の入力", "文字起こし中..."))
+            self.assertEqual(resources.transcription_engine.calls, [])
+
+    def test_transcription_status_generator_second_yield_returns_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "recording.wav")
+            resources = self._resources(audio_path)
+            generator = _transcribe_microphone_audio_with_status(
+                str(audio_path),
+                "既存の入力",
+                resources,
+            )
+
+            next(generator)
+            user_input, status = next(generator)
+
+            self.assertEqual(user_input, "文字起こし結果")
+            self.assertEqual(
+                status,
+                "文字起こししました。内容を確認・修正してから送信してください。",
+            )
+
+    def test_transcription_status_generator_second_yield_returns_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "recording.wav")
+            resources = self._resources(audio_path)
+            resources.transcription_engine = FakeTranscriptionEngine(
+                error=RuntimeError("安全なエラー")
+            )
+            generator = _transcribe_microphone_audio_with_status(
+                str(audio_path),
+                "消さない入力",
+                resources,
+            )
+
+            next(generator)
+            user_input, status = next(generator)
+
+            self.assertEqual(user_input, "消さない入力")
+            self.assertIn("文字起こしに失敗しました: 安全なエラー", status)
 
     def test_clear_conversation_clears_microphone_audio(self) -> None:
         chat_messages, history_state, audio_update, microphone_update, status = (
