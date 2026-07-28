@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -390,6 +391,23 @@ def _transcribe_microphone_audio(
     )
 
 
+def _transcribe_microphone_audio_with_status(
+    microphone_audio: str | Path | None,
+    current_user_text: str,
+    resources: AppResources,
+) -> Iterator[tuple[str, str]]:
+    yield (
+        str(current_user_text or ""),
+        "文字起こし中...",
+    )
+
+    yield _transcribe_microphone_audio(
+        microphone_audio,
+        current_user_text,
+        resources,
+    )
+
+
 def _apply_session_settings(
     name: str,
     first_person: str,
@@ -481,8 +499,8 @@ def build_ui(resources: AppResources) -> gr.Blocks:
         def transcribe_microphone_audio(
             microphone_audio: str | Path | None,
             current_user_text: str,
-        ) -> tuple[str, str]:
-            return _transcribe_microphone_audio(
+        ) -> Iterator[tuple[str, str]]:
+            yield from _transcribe_microphone_audio_with_status(
                 microphone_audio,
                 current_user_text,
                 resources,
