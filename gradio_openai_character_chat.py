@@ -637,6 +637,17 @@ def build_ui(resources: AppResources) -> gr.Blocks:
                 status,
             ],
         )
+        microphone_audio.stop_recording(
+            transcribe_microphone_audio,
+            inputs=[
+                microphone_audio,
+                user_input,
+            ],
+            outputs=[
+                user_input,
+                status,
+            ],
+        )
         clear_button.click(
             _clear_conversation,
             outputs=[

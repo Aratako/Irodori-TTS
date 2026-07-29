@@ -291,6 +291,46 @@ class GradioCharacterSettingsTest(unittest.TestCase):
             self.assertNotIn(chatbot._id, transcribe_dependency["outputs"])
             self.assertNotIn(generated_audio._id, transcribe_dependency["outputs"])
 
+    def test_microphone_stop_recording_starts_transcription_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = self._write_audio(Path(temp_dir) / "reference.wav")
+            demo = build_ui(self._resources(audio_path))
+            components_by_label = {
+                component.label: component
+                for component in demo.blocks.values()
+                if hasattr(component, "label")
+            }
+            user_input = components_by_label["あなたの文章"]
+            microphone_audio = components_by_label["マイク録音"]
+            status = components_by_label["状態"]
+            chatbot = components_by_label["キャラクターとの会話"]
+            generated_audio = components_by_label["生成音声"]
+            submit_dependency = next(
+                dependency
+                for dependency in demo.config["dependencies"]
+                if dependency["api_name"] == "submit_message"
+            )
+            chat_history_id = submit_dependency["outputs"][2]
+
+            stop_recording_dependency = next(
+                dependency
+                for dependency in demo.config["dependencies"]
+                if dependency["targets"][0][0] == microphone_audio._id
+                and dependency["targets"][0][1] == "stop_recording"
+            )
+
+            self.assertEqual(
+                stop_recording_dependency["inputs"],
+                [microphone_audio._id, user_input._id],
+            )
+            self.assertEqual(
+                stop_recording_dependency["outputs"],
+                [user_input._id, status._id],
+            )
+            self.assertNotIn(chatbot._id, stop_recording_dependency["outputs"])
+            self.assertNotIn(chat_history_id, stop_recording_dependency["outputs"])
+            self.assertNotIn(generated_audio._id, stop_recording_dependency["outputs"])
+
     def _resources(self, audio_path: Path) -> AppResources:
         return AppResources(
             llm_config=object(),
