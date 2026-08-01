@@ -23,6 +23,11 @@ from .config import ModelConfig, merge_dataclass_overrides
 from .duration import build_duration_features
 from .lora import checkpoint_state_uses_lora, is_lora_adapter_dir, load_lora_adapter
 from .model import TextToLatentRFDiT
+from .quantization import (
+    is_torchao_quantized_state_dict,
+    parse_quantization_metadata,
+    unflatten_quantized_state_dict,
+)
 from .rf import sample_euler_rf_cfg
 from .speaker_inversion import (
     load_speaker_inversion_payload,
@@ -495,6 +500,12 @@ def _load_checkpoint_from_safetensors(
     with safe_open(str(path), framework="pt", device="cpu") as handle:
         metadata = handle.metadata() or {}
 
+    if parse_quantization_metadata(metadata) is not None:
+        model_state, _ = unflatten_quantized_state_dict(
+            model_state,
+            metadata=metadata,
+        )
+
     flat_config = _parse_json_mapping(
         metadata.get(_CONFIG_META_KEY),
         field=_CONFIG_META_KEY,
@@ -518,26 +529,63 @@ def _load_checkpoint_for_inference(
     return _load_checkpoint_from_pt(path)
 
 
-def download_hf_checkpoint(repo_id: str) -> str:
-    """Download an Irodori checkpoint and any bundled tokenizer assets."""
+def _split_hf_checkpoint_source(source: str) -> tuple[str, str | None]:
+    raw = str(source).strip().strip("/")
+    if not raw:
+        raise ValueError("Hugging Face checkpoint source must be non-empty.")
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"Invalid Hugging Face checkpoint source: {source!r}")
+    if len(parts) <= 2:
+        return raw, None
+    if len(parts) != 3:
+        raise ValueError(
+            "Hugging Face checkpoint subfolders must use owner/repo/subfolder format: "
+            f"{source!r}"
+        )
+    return "/".join(parts[:2]), "/".join(parts[2:])
+
+
+def download_hf_checkpoint(source: str) -> str:
+    """Download an Irodori checkpoint and any bundled tokenizer assets.
+
+    ``source`` accepts either a Hugging Face repo id or ``repo_id/subfolder``.
+    """
     from huggingface_hub import snapshot_download
 
+    repo_id, subfolder = _split_hf_checkpoint_source(source)
+    if subfolder is None:
+        checkpoint_relative = Path("model.safetensors")
+        allow_patterns = ["model.safetensors", "tokenizer/*"]
+    else:
+        checkpoint_relative = Path(subfolder) / "model.safetensors"
+        allow_patterns = [
+            checkpoint_relative.as_posix(),
+            f"{subfolder}/tokenizer/*",
+            "tokenizer/*",
+        ]
     snapshot_dir = Path(
         snapshot_download(
             repo_id=repo_id,
-            allow_patterns=["model.safetensors", "tokenizer/*"],
+            allow_patterns=allow_patterns,
         )
     )
-    checkpoint_path = snapshot_dir / "model.safetensors"
+    checkpoint_path = snapshot_dir / checkpoint_relative
     if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"Hugging Face repo has no model.safetensors: {repo_id}")
+        raise FileNotFoundError(
+            f"Hugging Face checkpoint source has no model.safetensors: {source}"
+        )
     return str(checkpoint_path)
 
 
 def _resolve_tokenizer_source(checkpoint_path: Path, fallback_repo: str) -> tuple[str, bool]:
-    bundled = checkpoint_path.parent / "tokenizer"
-    if (bundled / "tokenizer_config.json").is_file():
-        return str(bundled), True
+    bundled_candidates = (
+        checkpoint_path.parent / "tokenizer",
+        checkpoint_path.parent.parent / "tokenizer",
+    )
+    for bundled in bundled_candidates:
+        if (bundled / "tokenizer_config.json").is_file():
+            return str(bundled), True
     return fallback_repo, False
 
 
@@ -601,7 +649,11 @@ class InferenceRuntime:
             pretrained_backbone_config=text_encoder_config,
             load_pretrained_backbone_weights=not model_cfg.use_pretrained_text_encoder,
         )
-        model.load_state_dict(model_state, assign=model_cfg.use_pretrained_text_encoder)
+        quantized_model = is_torchao_quantized_state_dict(model_state)
+        model.load_state_dict(
+            model_state,
+            assign=model_cfg.use_pretrained_text_encoder or quantized_model,
+        )
         model = model.to(model_device)
         model = _move_inference_module(model, device=model_device, dtype=model_dtype)
         model.eval()

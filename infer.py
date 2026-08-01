@@ -70,8 +70,8 @@ def main() -> None:
         "--hf-checkpoint",
         default=None,
         help=(
-            "Hugging Face model repo id to download model.safetensors from "
-            "(e.g. your-org/your-model)."
+            "Hugging Face model repo id or repo/subfolder containing model.safetensors "
+            "(e.g. your-org/your-model or your-org/your-model/int8-weight-only)."
         ),
     )
     parser.add_argument(

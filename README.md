@@ -567,6 +567,52 @@ For checkpoints with a pretrained text encoder, conversion also writes a `tokeni
 directory beside the safetensors file and embeds the encoder architecture config in the file.
 Keep the safetensors file and `tokenizer/` directory together when publishing or moving the model.
 
+### 4. TorchAO Quantization
+
+Convert an inference checkpoint with torchao. INT8 weight-only is the default:
+
+```bash
+uv run --no-sync python quantize_checkpoint.py path/to/model.safetensors \
+  --quantization int8-weight-only \
+  --output path/to/quantized/model.safetensors
+```
+
+Available schemes are `int8-weight-only` (W8A16), `int8-dynamic` (W8A8),
+`int4-weight-only` (W4A16, group size 128 by default), `float8-weight-only` (FP8 weights
+and BF16 activations), and `float8-dynamic` (FP8 weights and activations).
+INT4 weight-only uses the CUDA tinygemm kernel and requires compute capability 8.0 or newer.
+
+The default `core` profile quantizes the attention and MLP weights in the text,
+speaker, and diffusion Transformer blocks. Projectors, AdaLN, duration prediction,
+and the codec remain unquantized. `--profile all-linear` is available for more
+aggressive experimentation. BF16 model inference is recommended:
+
+```bash
+uv run --no-sync python infer.py \
+  --checkpoint path/to/quantized/model.safetensors \
+  --model-precision bf16 \
+  --text "こんにちは、私はAIです。" \
+  --ref-wav path/to/reference.wav \
+  --output-wav outputs/sample_int8.wav
+```
+
+Dynamic `--lora-adapter` inference is supported with quantized base checkpoints.
+Train the adapter against the matching full-precision base model.
+
+To use a pre-quantized model, select the desired quantization variant by appending
+its name to the Hugging Face repo id:
+
+```bash
+uv run --no-sync python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only \
+  --model-precision bf16 \
+  --text "こんにちは、私はAIです。" \
+  --no-ref \
+  --output-wav outputs/sample_int8.wav
+```
+
+Only the selected model variant and its tokenizer assets are downloaded.
+
 ## Project Structure
 
 ```text
@@ -577,6 +623,7 @@ Irodori-TTS/
 ├── gradio_app_voicedesign.py   # Gradio web UI for VoiceDesign checkpoints
 ├── prepare_manifest.py         # Dataset -> DACVAE latent preprocessing
 ├── convert_checkpoint_to_safetensors.py  # Checkpoint converter
+├── quantize_checkpoint.py      # torchao checkpoint quantization
 │
 ├── docs/
 │   └── parameters.md         # Detailed parameter guide
@@ -590,6 +637,7 @@ Irodori-TTS/
 │   ├── config.py               # Model and training config dataclasses
 │   ├── inference_runtime.py    # Cached, thread-safe inference runtime
 │   ├── lora.py                 # PEFT LoRA integration helpers
+│   ├── quantization.py         # torchao checkpoint serialization/load helpers
 │   ├── speaker_inversion.py    # Speaker Inversion embedding save/load helpers
 │   ├── text_normalization.py   # Japanese text normalization
 │   ├── optim.py                # Muon + AdamW optimizer

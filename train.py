@@ -658,6 +658,14 @@ def _load_model_state_from_checkpoint(
         text_encoder_config = None
         with safe_open(str(path), framework="pt", device="cpu") as handle:
             metadata = dict(handle.metadata() or {})
+        from irodori_tts.quantization import parse_quantization_metadata
+
+        if parse_quantization_metadata(metadata) is not None:
+            raise ValueError(
+                "Quantized checkpoints are inference-only and cannot be used with "
+                "--init-checkpoint. Train LoRA against the matching full-precision base model, "
+                "then merge and quantize it for inference."
+            )
         config_json = metadata.get(SAFETENSORS_CONFIG_META_KEY)
         if config_json:
             parsed = json.loads(config_json)

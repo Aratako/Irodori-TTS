@@ -24,6 +24,7 @@ from irodori_tts.lora import (
     load_lora_adapter,
 )
 from irodori_tts.model import TextToLatentRFDiT
+from irodori_tts.quantization import is_torchao_quantized_state_dict
 
 CONFIG_META_KEY = "config_json"
 TEXT_ENCODER_CONFIG_META_KEY = "text_encoder_config_json"
@@ -465,6 +466,11 @@ def _load_adapter_checkpoint(
     base_state, base_model_cfg, _, base_text_encoder_config = _load_checkpoint_for_inference(
         base_path
     )
+    if is_torchao_quantized_state_dict(base_state):
+        raise ValueError(
+            "LoRA merge requires the matching full-precision base checkpoint. Merge the adapter "
+            "first, then quantize the merged safetensors checkpoint."
+        )
     resolved_model_cfg = merge_dataclass_overrides(
         ModelConfig(),
         model_cfg,

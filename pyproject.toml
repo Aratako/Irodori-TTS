@@ -30,16 +30,19 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
     "torchaudio>=2.10.0,<2.11.0",
     "torchcodec>=0.10.0,<0.11.0",
 ]
 cu128 = [
     "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
     "torchaudio>=2.10.0,<2.11.0",
     "torchcodec>=0.10.0,<0.11.0",
 ]
 rocm = [
     "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
     "torchaudio>=2.10.0,<2.11.0",
     "torchcodec>=0.10.0,<0.11.0",
     "pytorch-triton-rocm>=3.5.1; sys_platform == 'linux'",
@@ -47,6 +50,7 @@ rocm = [
 ]
 xpu = [
     "torch>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchao>=0.16.0,<0.17.0; sys_platform == 'linux' or sys_platform == 'win32'",
     "torchaudio>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
     "torchcodec>=0.10.0,<0.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
     "triton-xpu==3.6.0; sys_platform == 'linux' or sys_platform == 'win32'",

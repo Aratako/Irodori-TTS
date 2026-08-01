@@ -25,7 +25,7 @@ a combined trained limit of 120 seconds.
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `--checkpoint` | required unless `--hf-checkpoint` is set | Local `.pt` or `.safetensors` checkpoint. Use this for converted local checkpoints or downloaded model files that you want to reference directly. |
-| `--hf-checkpoint` | required unless `--checkpoint` is set | Hugging Face repo id. The runtime downloads `model.safetensors` and bundled tokenizer assets from the repo. |
+| `--hf-checkpoint` | required unless `--checkpoint` is set | Hugging Face repo id or `repo/subfolder`. The runtime downloads `model.safetensors` and bundled tokenizer assets from the selected location. |
 | `--lora-adapter` | `None` | Optional PEFT LoRA adapter directory loaded dynamically at inference time. The adapter is not merged into the base checkpoint. |
 | `--codec-repo` | `Aratako/Semantic-DACVAE-Japanese-32dim` | DACVAE codec used to encode reference audio and decode generated latents. It should normally match the checkpoint metadata. |
 
