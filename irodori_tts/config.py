@@ -17,7 +17,12 @@ class ModelConfig:
     dropout: float = 0.0
     text_vocab_size: int = 102400
     text_tokenizer_repo: str = "sbintuitions/sarashina2.2-0.5b"
+    text_encoder_revision: str | None = None
     text_add_bos: bool = True
+    text_encoder_type: str = "scratch"
+    pretrained_projector_type: str = "linear"
+    pretrained_projector_hidden_ratio: float = 2.0
+    pretrained_projector_dropout: float = 0.0
     text_dim: int = 1280
     text_layers: int = 14
     text_heads: int = 10
@@ -69,6 +74,10 @@ class ModelConfig:
         if self.text_mlp_ratio is None:
             return self.mlp_ratio
         return float(self.text_mlp_ratio)
+
+    @property
+    def use_pretrained_text_encoder(self) -> bool:
+        return str(self.text_encoder_type).strip().lower() == "pretrained"
 
     @property
     def caption_vocab_size_resolved(self) -> int:
@@ -127,11 +136,16 @@ class TrainConfig:
     num_workers: int = 2
     dataloader_persistent_workers: bool = False
     dataloader_prefetch_factor: int = 2
+    dataloader_cuda_prefetch: bool = False
+    length_bucket_enabled: bool = False
+    length_bucket_window_batches: int = 64
+    latent_length_bucket_size: int = 0
     allow_tf32: bool = False
     compile_model: bool = False
     gradient_checkpointing: bool = False
     train_mode: str = "rf"
     learning_rate: float = 1e-4
+    pretrained_text_encoder_learning_rate: float = 1e-5
     weight_decay: float = 0.01
     optimizer: str = "muon"
     adam_beta1: float = 0.9
@@ -143,6 +157,7 @@ class TrainConfig:
     warmup_steps: int = 0
     caption_warmup: bool = False
     caption_warmup_steps: int = 0
+    pretrained_projector_warmup_steps: int = 0
     stable_steps: int = 0
     min_lr_scale: float = 0.1
     max_steps: int = 200000
@@ -166,10 +181,13 @@ class TrainConfig:
     speaker_inversion_init_std: float = 0.02
     speaker_inversion_init_embedding: str | None = None
     max_latent_steps: int = 750
+    ref_min_seconds: float = 1.0
+    ref_max_seconds: float = 120.0
     fixed_target_latent_steps: int | None = 750
     fixed_target_full_mask: bool = True
     rf_loss_mode: str = "echo"
     duration_loss_weight: float = 0.1
+    duration_backprop_to_condition: bool = False
     duration_speaker_dropout: float = 0.1
     duration_caption_dropout: float = 0.1
     duration_huber_delta: float = 0.1
@@ -194,28 +212,6 @@ class TrainConfig:
     seed: int = 0
 
 
-@dataclass
-class SamplingConfig:
-    num_steps: int = 40
-    cfg_scale_text: float = 3.0
-    cfg_scale_caption: float = 3.0
-    cfg_scale_speaker: float = 5.0
-    cfg_guidance_mode: str = "independent"
-    cfg_scale: float | None = None
-    cfg_min_t: float = 0.5
-    cfg_max_t: float = 1.0
-    truncation_factor: float | None = None
-    rescale_k: float | None = None
-    rescale_sigma: float | None = None
-    context_kv_cache: bool = True
-    speaker_kv_scale: float | None = None
-    speaker_kv_min_t: float | None = 0.9
-    speaker_kv_max_layers: int | None = None
-    # Deprecated: inference length is derived from --seconds and codec hop_length.
-    sequence_length: int | None = None
-    seed: int = 0
-
-
 def save_json(path: str | Path, payload: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,9 +225,9 @@ def dump_configs(path: str | Path, model_cfg: ModelConfig, train_cfg: TrainConfi
 T = TypeVar("T")
 
 
-def load_experiment_yaml(path: str | Path) -> dict[str, Any]:
+def load_config_yaml(path: str | Path) -> dict[str, Any]:
     """
-    Load experiment config YAML. Returns {} for an empty document.
+    Load a training config YAML. Returns {} for an empty document.
     """
     try:
         import yaml

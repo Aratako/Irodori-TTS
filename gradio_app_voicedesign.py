@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
-from huggingface_hub import hf_hub_download
 
 from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
 from irodori_tts.inference_runtime import (
@@ -14,6 +13,7 @@ from irodori_tts.inference_runtime import (
     SamplingRequest,
     clear_cached_runtime,
     default_runtime_device,
+    download_hf_checkpoint,
     get_cached_runtime,
     list_available_runtime_devices,
     list_available_runtime_precisions,
@@ -45,7 +45,7 @@ def _default_checkpoint() -> str:
         return str(preferred[-1])
     if candidates:
         return str(candidates[-1])
-    return "Aratako/Irodori-TTS-600M-v3-VoiceDesign"
+    return "Aratako/Irodori-TTS-v4-Small"
 
 
 def _default_model_device() -> str:
@@ -116,10 +116,31 @@ def _format_timings(stage_timings: list[tuple[str, float]], total_to_decode: flo
     return "\n".join(lines)
 
 
-def _resolve_ref_wav(uploaded_audio: str | None) -> str | None:
-    if uploaded_audio is not None and str(uploaded_audio).strip() != "":
-        return str(uploaded_audio)
-    return None
+def _coerce_gradio_file_path(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, dict):
+        for key in ("path", "name"):
+            candidate = value.get(key)
+            if candidate is not None and str(candidate).strip():
+                return str(candidate)
+        return None
+    candidate = getattr(value, "name", None)
+    if candidate is not None and str(candidate).strip():
+        return str(candidate)
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_ref_wavs(uploaded_audio: object) -> list[str]:
+    if uploaded_audio is None:
+        return []
+    values = uploaded_audio if isinstance(uploaded_audio, (list, tuple)) else [uploaded_audio]
+    paths = [_coerce_gradio_file_path(value) for value in values]
+    return [path for path in paths if path is not None]
 
 
 def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
@@ -133,7 +154,7 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     if suffix in {".pt", ".safetensors"}:
         return checkpoint
 
-    resolved = hf_hub_download(repo_id=checkpoint, filename="model.safetensors")
+    resolved = download_hf_checkpoint(checkpoint)
     print(f"[gradio-caption] checkpoint: hf://{checkpoint} -> {resolved}", flush=True)
     return str(resolved)
 
@@ -179,7 +200,8 @@ def _describe_runtime(
     notes: list[str] = []
     if not runtime.model_cfg.use_caption_condition:
         notes.append(
-            "warning: this checkpoint does not enable caption conditioning. Use gradio_app.py for reference-audio inference."
+            "warning: this checkpoint does not enable caption conditioning. "
+            "Use gradio_app.py for reference-only inference."
         )
     if runtime.model_cfg.use_speaker_condition_resolved:
         notes.append(
@@ -208,7 +230,7 @@ def _run_generation(
     codec_precision: str,
     text: str,
     caption: str,
-    ref_wav: str | None,
+    ref_wavs: object,
     num_steps: int,
     num_candidates: int,
     seed_raw: str,
@@ -269,12 +291,13 @@ def _run_generation(
     runtime, reloaded = get_cached_runtime(runtime_key)
     if not runtime.model_cfg.use_caption_condition:
         raise ValueError(
-            "Loaded checkpoint does not enable caption conditioning. Use gradio_app.py for the original reference-audio model."
+            "Loaded checkpoint does not enable caption conditioning. "
+            "Use gradio_app.py for reference-only inference."
         )
-    ref_wav_path = _resolve_ref_wav(ref_wav)
-    effective_no_ref = ref_wav_path is None or not runtime.model_cfg.use_speaker_condition_resolved
+    ref_wav_paths = _resolve_ref_wavs(ref_wavs)
+    effective_no_ref = not ref_wav_paths or not runtime.model_cfg.use_speaker_condition_resolved
     if effective_no_ref:
-        ref_wav_path = None
+        ref_wav_paths = []
 
     stdout_log(f"[gradio-caption] runtime: {'reloaded' if reloaded else 'reused'}")
     stdout_log(
@@ -296,6 +319,8 @@ def _run_generation(
             requested_candidates,
         )
     )
+    if ref_wav_paths:
+        stdout_log(f"[gradio-caption] reference clips: {len(ref_wav_paths)}")
     stdout_log(
         "[gradio-caption] conditioning: text={} caption={} speaker={}".format(
             "on" if text_value else "off",
@@ -308,7 +333,8 @@ def _run_generation(
         SamplingRequest(
             text=text_value,
             caption=caption_value or None,
-            ref_wav=ref_wav_path,
+            ref_wav=None,
+            ref_wavs=ref_wav_paths or None,
             ref_latent=None,
             no_ref=effective_no_ref,
             ref_normalize_db=-16.0,
@@ -317,7 +343,7 @@ def _run_generation(
             decode_mode="sequential",
             seconds=manual_seconds,
             duration_scale=float(duration_scale),
-            max_ref_seconds=30.0,
+            max_ref_seconds=None,
             max_text_len=max_text_len,
             max_caption_len=max_caption_len,
             num_steps=int(num_steps),
@@ -393,7 +419,8 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Irodori-TTS VoiceDesign Gradio") as demo:
         gr.Markdown("# Irodori-TTS VoiceDesign Inference")
         gr.Markdown(
-            "VoiceDesign版モデル向けのUIです。caption を入れると caption / style conditioning、空欄なら text-only conditioning で推論します。"
+            "Irodori-TTS-v4-Small向けの統合UIです。captionを入れると声質・スタイルを指定でき、"
+            "参照音声と組み合わせることもできます。"
         )
 
         with gr.Row():
@@ -443,9 +470,21 @@ def build_ui() -> gr.Blocks:
             label="Caption / Style Prompt (optional)",
             lines=4,
         )
-        ref_wav = gr.Audio(
-            label="Reference Audio Upload (optional, blank = no-reference mode)",
+        gr.Markdown(
+            "**Long-reference tip:** Upload multiple clean, shorter clips from the same "
+            "speaker and arrange them in the desired order. This matches v4-Small "
+            "training. A single uninterrupted long recording is accepted but has not "
+            "been evaluated."
+        )
+        ref_wavs = gr.File(
+            label=(
+                "Reference Audio Uploads (optional; concatenated in displayed order, "
+                "blank = no-reference mode)"
+            ),
             type="filepath",
+            file_count="multiple",
+            file_types=["audio"],
+            allow_reordering=True,
         )
 
         with gr.Accordion("Sampling", open=True):
@@ -562,7 +601,7 @@ def build_ui() -> gr.Blocks:
                 codec_precision,
                 text,
                 caption,
-                ref_wav,
+                ref_wavs,
                 num_steps,
                 num_candidates,
                 seed_raw,

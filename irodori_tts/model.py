@@ -672,6 +672,211 @@ class TextEncoder(nn.Module):
         return x * mask_f
 
 
+class PretrainedTextBackbone(nn.Module):
+    """Hugging Face backbone shared by text and caption conditioning."""
+
+    def __init__(
+        self,
+        repo_id: str,
+        *,
+        revision: str | None = None,
+        config_dict: dict[str, object] | None = None,
+        load_pretrained_weights: bool = True,
+    ):
+        super().__init__()
+        try:
+            from transformers import AutoConfig, AutoModel
+            from transformers.initialization import no_init_weights
+        except ImportError as exc:
+            raise RuntimeError(
+                "transformers is required when text_encoder_type='pretrained'."
+            ) from exc
+
+        if config_dict is None:
+            config = AutoConfig.from_pretrained(
+                repo_id,
+                trust_remote_code=False,
+                revision=revision,
+            )
+        else:
+            raw_config = dict(config_dict)
+            model_type = raw_config.pop("model_type", None)
+            if not isinstance(model_type, str) or not model_type:
+                raise ValueError("Embedded pretrained text encoder config has no model_type.")
+            config = AutoConfig.for_model(model_type, **raw_config)
+        if str(getattr(config, "model_type", "")).lower() == "t5gemma2":
+            # Loading AutoModel would materialize the decoder and vision tower before
+            # discarding them. Load only the bidirectional text encoder weights.
+            try:
+                from transformers.models.t5gemma2.modeling_t5gemma2 import (
+                    T5Gemma2TextEncoder,
+                )
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The installed transformers version does not expose T5Gemma2TextEncoder."
+                ) from exc
+            if load_pretrained_weights:
+                backbone = T5Gemma2TextEncoder.from_pretrained(
+                    repo_id,
+                    config=config.encoder.text_config,
+                    eoi_token_index=config.eoi_token_index,
+                    trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    revision=revision,
+                    key_mapping={r"^model\.encoder\.(.*)": r"\1"},
+                )
+            else:
+                with no_init_weights():
+                    backbone = T5Gemma2TextEncoder(
+                        config.encoder.text_config,
+                        eoi_token_index=config.eoi_token_index,
+                    )
+        else:
+            if load_pretrained_weights:
+                loaded_model = AutoModel.from_pretrained(
+                    repo_id,
+                    config=config,
+                    trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    revision=revision,
+                )
+            else:
+                with no_init_weights():
+                    loaded_model = AutoModel.from_config(
+                        config,
+                        trust_remote_code=False,
+                    )
+            if bool(getattr(config, "is_encoder_decoder", False)):
+                get_encoder = getattr(loaded_model, "get_encoder", None)
+                if get_encoder is None:
+                    raise ValueError(
+                        f"Encoder-decoder model does not expose get_encoder(): {repo_id}"
+                    )
+                encoder = get_encoder()
+                backbone = getattr(encoder, "text_model", encoder)
+            else:
+                backbone = loaded_model
+
+        hidden_size = _pretrained_hidden_size(backbone.config)
+        # Register only the selected backbone. In the encoder-decoder case this
+        # drops the decoder immediately after loading.
+        self.backbone = backbone
+        self.hidden_size = hidden_size
+        self.repo_id = str(repo_id)
+        self.revision = revision
+        self.config_dict = config.to_dict()
+        for parameter in self.backbone.parameters():
+            parameter.requires_grad_(True)
+
+    def forward(self, input_ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        outputs = self.backbone(
+            input_ids=input_ids,
+            attention_mask=mask,
+            return_dict=True,
+        )
+        state = outputs.last_hidden_state
+        return state * mask.unsqueeze(-1).to(dtype=state.dtype)
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        method_name = (
+            "gradient_checkpointing_enable" if enabled else "gradient_checkpointing_disable"
+        )
+        method = getattr(self.backbone, method_name, None)
+        if callable(method):
+            method()
+
+
+def _pretrained_hidden_size(config: object) -> int:
+    candidates = (
+        config,
+        getattr(config, "text_config", None),
+        getattr(config, "encoder", None),
+        getattr(getattr(config, "encoder", None), "text_config", None),
+    )
+    for candidate in candidates:
+        hidden_size = getattr(candidate, "hidden_size", None)
+        if hidden_size is not None:
+            return int(hidden_size)
+    raise ValueError(f"Could not determine pretrained encoder hidden size from {config!r}.")
+
+
+class PretrainedConditionProjector(nn.Module):
+    """Trainable projection from a shared pretrained backbone into a condition space."""
+
+    def __init__(
+        self,
+        backbone_dim: int,
+        output_dim: int,
+        *,
+        projector_type: str = "linear",
+        hidden_ratio: float = 2.0,
+        dropout: float = 0.0,
+        norm_eps: float = 1e-5,
+    ):
+        super().__init__()
+        projector_type = str(projector_type).strip().lower()
+        if projector_type not in {"linear", "residual_mlp"}:
+            raise ValueError(
+                "pretrained projector type must be 'linear' or 'residual_mlp', "
+                f"got {projector_type!r}."
+            )
+        if hidden_ratio <= 0:
+            raise ValueError(f"projector hidden_ratio must be > 0, got {hidden_ratio}.")
+        if not 0.0 <= dropout <= 1.0:
+            raise ValueError(f"projector dropout must be in [0, 1], got {dropout}.")
+
+        self.projector_type = projector_type
+        self.projector = nn.Linear(backbone_dim, output_dim, bias=True)
+        if backbone_dim == output_dim:
+            nn.init.eye_(self.projector.weight)
+        else:
+            nn.init.xavier_uniform_(self.projector.weight)
+        if self.projector.bias is not None:
+            nn.init.zeros_(self.projector.bias)
+
+        self.residual_norm = None
+        self.residual_up = None
+        self.residual_down = None
+        self.residual_dropout = None
+        if projector_type == "residual_mlp":
+            hidden_dim = max(1, int(round(output_dim * float(hidden_ratio))))
+            self.residual_norm = RMSNorm(backbone_dim, eps=norm_eps)
+            self.residual_up = nn.Linear(backbone_dim, hidden_dim, bias=True)
+            self.residual_down = nn.Linear(hidden_dim, output_dim, bias=True)
+            self.residual_dropout = nn.Dropout(float(dropout))
+            # Start exactly at the base Linear mapping. The residual branch
+            # gradually comes online during projector-only warmup.
+            nn.init.zeros_(self.residual_down.weight)
+            nn.init.zeros_(self.residual_down.bias)
+
+    def forward(
+        self,
+        backbone: PretrainedTextBackbone,
+        input_ids: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        state = backbone(input_ids, mask)
+        if (
+            not torch.is_autocast_enabled(state.device.type)
+            and state.dtype != self.projector.weight.dtype
+        ):
+            state = state.to(dtype=self.projector.weight.dtype)
+        projected = self.projector(state)
+        if self.projector_type == "residual_mlp":
+            if (
+                self.residual_norm is None
+                or self.residual_up is None
+                or self.residual_down is None
+                or self.residual_dropout is None
+            ):
+                raise RuntimeError("Residual pretrained projector modules are missing.")
+            residual = self.residual_norm(state)
+            residual = F.silu(self.residual_up(residual))
+            residual = self.residual_dropout(residual)
+            projected = projected + self.residual_down(residual)
+        return projected * mask.unsqueeze(-1).to(dtype=projected.dtype)
+
+
 class ReferenceLatentEncoder(nn.Module):
     """
     Encoder for reference latents used as speaker/style conditioning.
@@ -1250,30 +1455,70 @@ class TextToLatentRFDiT(nn.Module):
     Output v_pred shape: same as input.
     """
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(
+        self,
+        cfg: ModelConfig,
+        *,
+        pretrained_backbone_config: dict[str, object] | None = None,
+        load_pretrained_backbone_weights: bool = True,
+    ):
         super().__init__()
         self.cfg = cfg
-        self.text_encoder = TextEncoder(
-            vocab_size=cfg.text_vocab_size,
-            dim=cfg.text_dim,
-            layers=cfg.text_layers,
-            heads=cfg.text_heads,
-            mlp_ratio=cfg.text_mlp_ratio_resolved,
-            norm_eps=cfg.norm_eps,
-            dropout=cfg.dropout,
-        )
-        self.caption_encoder = None
-        self.caption_norm = None
-        if cfg.use_caption_condition:
-            self.caption_encoder = TextEncoder(
-                vocab_size=cfg.caption_vocab_size_resolved,
-                dim=cfg.caption_dim_resolved,
-                layers=cfg.caption_layers_resolved,
-                heads=cfg.caption_heads_resolved,
-                mlp_ratio=cfg.caption_mlp_ratio_resolved,
+        self.pretrained_text_backbone = None
+        if cfg.use_pretrained_text_encoder:
+            self.pretrained_text_backbone = PretrainedTextBackbone(
+                cfg.text_tokenizer_repo,
+                revision=cfg.text_encoder_revision,
+                config_dict=pretrained_backbone_config,
+                load_pretrained_weights=load_pretrained_backbone_weights,
+            )
+            self.text_encoder = PretrainedConditionProjector(
+                self.pretrained_text_backbone.hidden_size,
+                cfg.text_dim,
+                projector_type=cfg.pretrained_projector_type,
+                hidden_ratio=cfg.pretrained_projector_hidden_ratio,
+                dropout=cfg.pretrained_projector_dropout,
+                norm_eps=cfg.norm_eps,
+            )
+        else:
+            self.text_encoder = TextEncoder(
+                vocab_size=cfg.text_vocab_size,
+                dim=cfg.text_dim,
+                layers=cfg.text_layers,
+                heads=cfg.text_heads,
+                mlp_ratio=cfg.text_mlp_ratio_resolved,
                 norm_eps=cfg.norm_eps,
                 dropout=cfg.dropout,
             )
+        self.caption_encoder = None
+        self.caption_norm = None
+        if cfg.use_caption_condition:
+            if cfg.use_pretrained_text_encoder:
+                if cfg.caption_tokenizer_repo_resolved != cfg.text_tokenizer_repo:
+                    raise ValueError(
+                        "A shared pretrained text/caption encoder requires identical tokenizer "
+                        "repositories: "
+                        f"text={cfg.text_tokenizer_repo!r}, "
+                        f"caption={cfg.caption_tokenizer_repo_resolved!r}."
+                    )
+                self.caption_encoder = PretrainedConditionProjector(
+                    self.pretrained_text_backbone.hidden_size,
+                    cfg.caption_dim_resolved,
+                    projector_type=cfg.pretrained_projector_type,
+                    hidden_ratio=cfg.pretrained_projector_hidden_ratio,
+                    dropout=cfg.pretrained_projector_dropout,
+                    norm_eps=cfg.norm_eps,
+                )
+            else:
+                self.caption_encoder = TextEncoder(
+                    vocab_size=cfg.caption_vocab_size_resolved,
+                    dim=cfg.caption_dim_resolved,
+                    layers=cfg.caption_layers_resolved,
+                    heads=cfg.caption_heads_resolved,
+                    mlp_ratio=cfg.caption_mlp_ratio_resolved,
+                    norm_eps=cfg.norm_eps,
+                    dropout=cfg.dropout,
+                )
             self.caption_norm = RMSNorm(cfg.caption_dim_resolved, eps=cfg.norm_eps)
         self.speaker_encoder = None
         if cfg.use_speaker_condition_resolved:
@@ -1334,6 +1579,8 @@ class TextToLatentRFDiT(nn.Module):
 
     def set_gradient_checkpointing(self, enabled: bool) -> None:
         self.gradient_checkpointing = bool(enabled)
+        if self.pretrained_text_backbone is not None:
+            self.pretrained_text_backbone.set_gradient_checkpointing(enabled)
 
     def enable_speaker_inversion(
         self,
@@ -1527,7 +1774,10 @@ class TextToLatentRFDiT(nn.Module):
                 caption_mask = caption_mask.clone()
                 caption_mask[caption_condition_dropout] = False
 
-        text_state = self.text_encoder(text_input_ids, text_mask)
+        if self.pretrained_text_backbone is None:
+            text_state = self.text_encoder(text_input_ids, text_mask)
+        else:
+            text_state = self.text_encoder(self.pretrained_text_backbone, text_input_ids, text_mask)
         text_state = self.text_norm(text_state)
         ref_state = None
         if self.cfg.use_speaker_condition_resolved:
@@ -1567,7 +1817,12 @@ class TextToLatentRFDiT(nn.Module):
             )
         caption_state = None
         if self.cfg.use_caption_condition:
-            caption_state = self.caption_encoder(caption_input_ids, caption_mask)
+            if self.pretrained_text_backbone is None:
+                caption_state = self.caption_encoder(caption_input_ids, caption_mask)
+            else:
+                caption_state = self.caption_encoder(
+                    self.pretrained_text_backbone, caption_input_ids, caption_mask
+                )
             caption_state = self.caption_norm(caption_state)
         return text_state, text_mask, ref_state, ref_mask, caption_state, caption_mask
 
@@ -1645,6 +1900,7 @@ class TextToLatentRFDiT(nn.Module):
         duration_has_speaker: torch.Tensor | None = None,
         duration_has_caption: torch.Tensor | None = None,
         duration_only: bool = False,
+        duration_backprop_to_condition: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if duration_features is not None:
             (
@@ -1673,6 +1929,7 @@ class TextToLatentRFDiT(nn.Module):
                     duration_features=duration_features,
                     has_speaker=duration_has_speaker,
                     has_caption=duration_has_caption,
+                    detach_condition=True,
                 )
 
             if x_t is None or t is None:
@@ -1722,6 +1979,7 @@ class TextToLatentRFDiT(nn.Module):
                 duration_features=duration_features,
                 has_speaker=duration_has_speaker,
                 has_caption=duration_has_caption,
+                detach_condition=not duration_backprop_to_condition,
             )
             return v_pred, duration_pred
 
@@ -1796,6 +2054,7 @@ class TextToLatentRFDiT(nn.Module):
         caption_state: torch.Tensor | None = None,
         caption_mask: torch.Tensor | None = None,
         has_caption: torch.Tensor | None = None,
+        detach_condition: bool = True,
     ) -> torch.Tensor:
         if self.duration_predictor is None:
             raise RuntimeError("Duration predictor is disabled for this model.")
@@ -1809,14 +2068,23 @@ class TextToLatentRFDiT(nn.Module):
                 f"expected {self.cfg.duration_aux_dim}, got {duration_features.shape[1]}"
             )
 
+        duration_text_state = text_state
+        duration_speaker_state = speaker_state
+        duration_caption_state = caption_state
+        if detach_condition:
+            duration_text_state = text_state.detach()
+            if speaker_state is not None:
+                duration_speaker_state = speaker_state.detach()
+            if caption_state is not None:
+                duration_caption_state = caption_state.detach()
         pred = self.duration_predictor(
-            text_state.detach(),
+            duration_text_state,
             text_mask=text_mask,
             aux_features=duration_features,
-            speaker_state=None if speaker_state is None else speaker_state.detach(),
+            speaker_state=duration_speaker_state,
             speaker_mask=speaker_mask,
             has_speaker=has_speaker,
-            caption_state=None if caption_state is None else caption_state.detach(),
+            caption_state=duration_caption_state,
             caption_mask=caption_mask,
             has_caption=has_caption,
         )

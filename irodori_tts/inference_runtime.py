@@ -19,7 +19,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file as load_safetensors_file
 
 from .codec import DACVAECodec, patchify_latent, unpatchify_latent
-from .config import ModelConfig
+from .config import ModelConfig, merge_dataclass_overrides
 from .duration import build_duration_features
 from .lora import checkpoint_state_uses_lora, is_lora_adapter_dir, load_lora_adapter
 from .model import TextToLatentRFDiT
@@ -67,7 +67,9 @@ def resolve_runtime_device(device: str | torch.device) -> torch.device:
         if not _is_xpu_available():
             raise ValueError("XPU device requested but torch.xpu.is_available() is False.")
         return torch.device("xpu")
-    raise ValueError(f"Unsupported inference device={resolved!s}. Expected one of: cpu, cuda, mps, xpu.")
+    raise ValueError(
+        f"Unsupported inference device={resolved!s}. Expected one of: cpu, cuda, mps, xpu."
+    )
 
 
 def list_available_runtime_devices() -> list[str]:
@@ -195,7 +197,9 @@ class SamplingRequest:
     text: str
     caption: str | None = None
     ref_wav: str | None = None
+    ref_wavs: list[str] | None = None
     ref_latent: str | None = None
+    ref_latents: list[str] | None = None
     ref_embed: str | None = None
     no_ref: bool = False
     ref_normalize_db: float | None = -16.0
@@ -206,7 +210,9 @@ class SamplingRequest:
     duration_scale: float = 1.0
     min_seconds: float = 0.5
     max_seconds: float = 30.0
-    max_ref_seconds: float | None = 30.0
+    # None selects the checkpoint recommendation; legacy checkpoints fall back
+    # to 30 seconds. A non-positive explicit value disables the cap.
+    max_ref_seconds: float | None = None
     max_text_len: int | None = None
     max_caption_len: int | None = None
     num_steps: int = 40
@@ -350,20 +356,25 @@ def _load_torch_checkpoint_payload(path: Path) -> dict:
 
 
 _CONFIG_META_KEY = "config_json"
-_INFERENCE_CONFIG_KEYS = {
+_TEXT_ENCODER_CONFIG_META_KEY = "text_encoder_config_json"
+_INFERENCE_INT_CONFIG_KEYS = {
     "max_text_len",
     "max_caption_len",
     "fixed_target_latent_steps",
 }
+_INFERENCE_FLOAT_CONFIG_KEYS = {"ref_max_seconds"}
+_INFERENCE_CONFIG_KEYS = _INFERENCE_INT_CONFIG_KEYS | _INFERENCE_FLOAT_CONFIG_KEYS
+_LEGACY_MAX_REF_SECONDS = 30.0
 
 
 def _load_checkpoint_from_pt(
     path: Path,
-) -> tuple[dict[str, torch.Tensor], dict, dict | None]:
+) -> tuple[dict[str, torch.Tensor], dict, dict | None, dict | None]:
     ckpt = _load_torch_checkpoint_payload(path)
     model_state = ckpt.get("model")
     model_cfg = ckpt.get("model_config")
     train_cfg = ckpt.get("train_config")
+    text_encoder_config = ckpt.get("text_encoder_config")
 
     if not isinstance(model_state, dict):
         raise ValueError(f"Checkpoint missing model weights dictionary: {path}")
@@ -371,12 +382,21 @@ def _load_checkpoint_from_pt(
         raise ValueError(f"Checkpoint missing model_config dictionary: {path}")
     if train_cfg is not None and not isinstance(train_cfg, dict):
         raise ValueError(f"Checkpoint train_config must be a dictionary when present: {path}")
+    if text_encoder_config is not None and not isinstance(text_encoder_config, dict):
+        raise ValueError(
+            f"Checkpoint text_encoder_config must be a dictionary when present: {path}"
+        )
 
     if checkpoint_state_uses_lora(model_state):
         raise ValueError(
             f"LoRA checkpoints must be loaded from adapter directories or merged safetensors: {path}"
         )
-    return model_state, model_cfg, _extract_inference_train_config(train_cfg)
+    return (
+        model_state,
+        model_cfg,
+        _extract_inference_train_config(train_cfg),
+        text_encoder_config,
+    )
 
 
 def _parse_json_mapping(
@@ -403,8 +423,8 @@ def _extract_inference_train_config(raw: dict | None) -> dict | None:
     if raw is None:
         return None
 
-    inference_cfg: dict[str, int] = {}
-    for key in _INFERENCE_CONFIG_KEYS:
+    inference_cfg: dict[str, int | float] = {}
+    for key in _INFERENCE_INT_CONFIG_KEYS:
         value = raw.get(key)
         if value is None:
             continue
@@ -412,27 +432,62 @@ def _extract_inference_train_config(raw: dict | None) -> dict | None:
             raise ValueError(f"Inference config key '{key}' must be int, got {type(value)!r}.")
         inference_cfg[key] = int(value)
 
+    for key in _INFERENCE_FLOAT_CONFIG_KEYS:
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Inference config key '{key}' must be numeric, got {type(value)!r}.")
+        value_float = float(value)
+        if not math.isfinite(value_float):
+            raise ValueError(f"Inference config key '{key}' must be finite, got {value!r}.")
+        if value_float > 0.0:
+            inference_cfg[key] = value_float
+
     return inference_cfg or None
 
 
 def _split_flat_checkpoint_config(path: Path, flat_config: dict) -> tuple[dict, dict | None]:
     model_cfg: dict[str, object] = {}
-    inference_cfg: dict[str, int] = {}
+    inference_cfg: dict[str, int | float] = {}
     for key, value in flat_config.items():
-        if key in _INFERENCE_CONFIG_KEYS:
+        if key in _INFERENCE_INT_CONFIG_KEYS:
             if not isinstance(value, int):
                 raise ValueError(
                     f"Inference config key '{key}' must be int in checkpoint metadata: {path}"
                 )
             inference_cfg[key] = int(value)
             continue
+        if key in _INFERENCE_FLOAT_CONFIG_KEYS:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"Inference config key '{key}' must be numeric in checkpoint metadata: {path}"
+                )
+            value_float = float(value)
+            if not math.isfinite(value_float):
+                raise ValueError(
+                    f"Inference config key '{key}' must be finite in checkpoint metadata: {path}"
+                )
+            if value_float > 0.0:
+                inference_cfg[key] = value_float
+            continue
         model_cfg[key] = value
     return model_cfg, (inference_cfg or None)
 
 
+def _default_max_ref_seconds(train_cfg: dict | None) -> float:
+    if isinstance(train_cfg, dict):
+        value = train_cfg.get("ref_max_seconds")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value_float = float(value)
+            if math.isfinite(value_float) and value_float > 0.0:
+                return value_float
+    return _LEGACY_MAX_REF_SECONDS
+
+
 def _load_checkpoint_from_safetensors(
     path: Path,
-) -> tuple[dict[str, torch.Tensor], dict, dict | None]:
+) -> tuple[dict[str, torch.Tensor], dict, dict | None, dict | None]:
     model_state = load_safetensors_file(str(path), device="cpu")
     if not isinstance(model_state, dict) or not model_state:
         raise ValueError(f"Safetensors checkpoint has no model weights: {path}")
@@ -446,16 +501,44 @@ def _load_checkpoint_from_safetensors(
         path=path,
         required=True,
     )
+    text_encoder_config = _parse_json_mapping(
+        metadata.get(_TEXT_ENCODER_CONFIG_META_KEY),
+        field=_TEXT_ENCODER_CONFIG_META_KEY,
+        path=path,
+    )
     model_cfg, inference_cfg = _split_flat_checkpoint_config(path=path, flat_config=flat_config)
-    return model_state, model_cfg, inference_cfg
+    return model_state, model_cfg, inference_cfg, text_encoder_config
 
 
 def _load_checkpoint_for_inference(
     path: Path,
-) -> tuple[dict[str, torch.Tensor], dict, dict | None]:
+) -> tuple[dict[str, torch.Tensor], dict, dict | None, dict | None]:
     if path.suffix.lower() == ".safetensors":
         return _load_checkpoint_from_safetensors(path)
     return _load_checkpoint_from_pt(path)
+
+
+def download_hf_checkpoint(repo_id: str) -> str:
+    """Download an Irodori checkpoint and any bundled tokenizer assets."""
+    from huggingface_hub import snapshot_download
+
+    snapshot_dir = Path(
+        snapshot_download(
+            repo_id=repo_id,
+            allow_patterns=["model.safetensors", "tokenizer/*"],
+        )
+    )
+    checkpoint_path = snapshot_dir / "model.safetensors"
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Hugging Face repo has no model.safetensors: {repo_id}")
+    return str(checkpoint_path)
+
+
+def _resolve_tokenizer_source(checkpoint_path: Path, fallback_repo: str) -> tuple[str, bool]:
+    bundled = checkpoint_path.parent / "tokenizer"
+    if (bundled / "tokenizer_config.json").is_file():
+        return str(bundled), True
+    return fallback_repo, False
 
 
 class InferenceRuntime:
@@ -471,6 +554,7 @@ class InferenceRuntime:
         codec: DACVAECodec,
         default_text_max_len: int,
         default_caption_max_len: int,
+        default_max_ref_seconds: float = _LEGACY_MAX_REF_SECONDS,
     ) -> None:
         self.key = key
         self.model_device = resolve_runtime_device(key.model_device)
@@ -483,6 +567,7 @@ class InferenceRuntime:
         self.codec = codec
         self.default_text_max_len = default_text_max_len
         self.default_caption_max_len = default_caption_max_len
+        self.default_max_ref_seconds = float(default_max_ref_seconds)
         self.watermarker = SilentCipherWatermarker(device=str(self.codec_device))
         self._infer_lock = threading.Lock()
         self._model_dtype = next(self.model.parameters()).dtype
@@ -501,13 +586,23 @@ class InferenceRuntime:
             device=codec_device,
         )
 
-        model_state, model_cfg_dict, train_cfg = _load_checkpoint_for_inference(
-            Path(key.checkpoint)
+        checkpoint_path = Path(key.checkpoint)
+        model_state, model_cfg_dict, train_cfg, text_encoder_config = (
+            _load_checkpoint_for_inference(checkpoint_path)
         )
-        model_cfg = ModelConfig(**model_cfg_dict)
+        model_cfg = merge_dataclass_overrides(
+            ModelConfig(),
+            model_cfg_dict,
+            section="checkpoint model_config",
+        )
 
-        model = TextToLatentRFDiT(model_cfg).to(model_device)
-        model.load_state_dict(model_state)
+        model = TextToLatentRFDiT(
+            model_cfg,
+            pretrained_backbone_config=text_encoder_config,
+            load_pretrained_backbone_weights=not model_cfg.use_pretrained_text_encoder,
+        )
+        model.load_state_dict(model_state, assign=model_cfg.use_pretrained_text_encoder)
+        model = model.to(model_device)
         model = _move_inference_module(model, device=model_device, dtype=model_dtype)
         model.eval()
         model = _maybe_compile_inference_model(
@@ -516,24 +611,42 @@ class InferenceRuntime:
             dynamic=bool(key.compile_dynamic),
         )
 
-        tokenizer = PretrainedTextTokenizer.from_pretrained(
-            repo_id=model_cfg.text_tokenizer_repo,
-            add_bos=bool(model_cfg.text_add_bos),
-            local_files_only=False,
+        text_tokenizer_source, text_tokenizer_is_local = _resolve_tokenizer_source(
+            checkpoint_path,
+            model_cfg.text_tokenizer_repo,
         )
-        if tokenizer.vocab_size != model_cfg.text_vocab_size:
+        tokenizer = PretrainedTextTokenizer.from_pretrained(
+            repo_id=text_tokenizer_source,
+            add_bos=bool(model_cfg.text_add_bos),
+            local_files_only=text_tokenizer_is_local,
+            revision=None if text_tokenizer_is_local else model_cfg.text_encoder_revision,
+        )
+        if (
+            not model_cfg.use_pretrained_text_encoder
+            and tokenizer.vocab_size != model_cfg.text_vocab_size
+        ):
             raise ValueError(
                 f"text_vocab_size mismatch: checkpoint text_vocab_size={model_cfg.text_vocab_size} but tokenizer "
                 f"({model_cfg.text_tokenizer_repo}) vocab_size={tokenizer.vocab_size}."
             )
         caption_tokenizer = None
         if model_cfg.use_caption_condition:
-            caption_tokenizer = PretrainedTextTokenizer.from_pretrained(
-                repo_id=model_cfg.caption_tokenizer_repo_resolved,
-                add_bos=model_cfg.caption_add_bos_resolved,
-                local_files_only=False,
+            caption_tokenizer_source, caption_tokenizer_is_local = _resolve_tokenizer_source(
+                checkpoint_path,
+                model_cfg.caption_tokenizer_repo_resolved,
             )
-            if caption_tokenizer.vocab_size != model_cfg.caption_vocab_size_resolved:
+            caption_tokenizer = PretrainedTextTokenizer.from_pretrained(
+                repo_id=caption_tokenizer_source,
+                add_bos=model_cfg.caption_add_bos_resolved,
+                local_files_only=caption_tokenizer_is_local,
+                revision=(
+                    None if caption_tokenizer_is_local else model_cfg.text_encoder_revision
+                ),
+            )
+            if (
+                not model_cfg.use_pretrained_text_encoder
+                and caption_tokenizer.vocab_size != model_cfg.caption_vocab_size_resolved
+            ):
                 raise ValueError(
                     f"caption_vocab_size mismatch: checkpoint caption_vocab_size={model_cfg.caption_vocab_size_resolved} but tokenizer ({model_cfg.caption_tokenizer_repo_resolved}) "
                     f"vocab_size={caption_tokenizer.vocab_size}."
@@ -541,6 +654,7 @@ class InferenceRuntime:
 
         default_text_max_len = 256
         default_caption_max_len = default_text_max_len
+        default_max_ref_seconds = _default_max_ref_seconds(train_cfg)
         if isinstance(train_cfg, dict):
             ckpt_text_max_len = train_cfg.get("max_text_len")
             if isinstance(ckpt_text_max_len, int) and ckpt_text_max_len > 0:
@@ -574,6 +688,7 @@ class InferenceRuntime:
             codec=codec,
             default_text_max_len=default_text_max_len,
             default_caption_max_len=default_caption_max_len,
+            default_max_ref_seconds=default_max_ref_seconds,
         )
 
     def _resolve_lora_adapter_path(self, adapter_path: str | None) -> str | None:
@@ -674,8 +789,29 @@ class InferenceRuntime:
         messages: list[str],
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         runtime_dtype = next(self.model.parameters()).dtype
+        max_ref_seconds = (
+            self.default_max_ref_seconds
+            if req.max_ref_seconds is None
+            else float(req.max_ref_seconds)
+        )
+        wav_paths = ([req.ref_wav] if req.ref_wav is not None else []) + list(
+            req.ref_wavs or []
+        )
+        latent_paths = ([req.ref_latent] if req.ref_latent is not None else []) + list(
+            req.ref_latents or []
+        )
+        if req.ref_wav is not None and req.ref_wavs:
+            raise ValueError("ref_wav and ref_wavs cannot be used together.")
+        if req.ref_latent is not None and req.ref_latents:
+            raise ValueError("ref_latent and ref_latents cannot be used together.")
+        if wav_paths and latent_paths:
+            raise ValueError("Waveform and latent reference inputs cannot be mixed.")
+        if any(not isinstance(path, str) or not path.strip() for path in wav_paths):
+            raise ValueError("Reference waveform paths must be non-empty strings.")
+        if any(not isinstance(path, str) or not path.strip() for path in latent_paths):
+            raise ValueError("Reference latent paths must be non-empty strings.")
         if not self.model_cfg.use_speaker_condition_resolved:
-            if req.ref_wav is not None or req.ref_latent is not None:
+            if wav_paths or latent_paths:
                 messages.append(
                     "info: speaker conditioning is disabled for this checkpoint; ignoring reference input."
                 )
@@ -696,53 +832,92 @@ class InferenceRuntime:
             )
             return ref_latent_patched, ref_mask
 
-        if req.ref_wav is None and req.ref_latent is None:
-            raise ValueError("Specify either ref_wav/ref_latent, or set no_ref=True.")
+        if not wav_paths and not latent_paths:
+            raise ValueError(
+                "Specify ref_wav/ref_wavs/ref_latent/ref_latents, or set no_ref=True."
+            )
 
         max_ref_latent_steps = None
-        if req.max_ref_seconds is not None and req.max_ref_seconds > 0:
+        if max_ref_seconds > 0:
             max_ref_latent_steps = max(
                 1,
                 math.ceil(
-                    float(req.max_ref_seconds)
+                    max_ref_seconds
                     * float(self.codec.sample_rate)
                     / float(int(self.codec.model.hop_length))
                 ),
             )
 
-        if req.ref_latent is not None:
-            latent_raw = torch.load(req.ref_latent, map_location="cpu", weights_only=True)
-            ref_latent = _coerce_latent_shape(
-                latent_raw, latent_dim=self.model_cfg.latent_dim
-            ).unsqueeze(0)
-            ref_latent = ref_latent.to(dtype=runtime_dtype)
+        if latent_paths:
+            latent_pieces: list[torch.Tensor] = []
+            for path in latent_paths:
+                latent_raw = torch.load(path, map_location="cpu", weights_only=True)
+                piece = _coerce_latent_shape(
+                    latent_raw, latent_dim=self.model_cfg.latent_dim
+                ).unsqueeze(0)
+                if piece.shape[1] == 0:
+                    raise ValueError(f"Reference latent is empty: {path}")
+                latent_pieces.append(piece.to(dtype=runtime_dtype))
+                if (
+                    max_ref_latent_steps is not None
+                    and sum(int(item.shape[1]) for item in latent_pieces)
+                    >= max_ref_latent_steps
+                ):
+                    break
+            ref_latent = torch.cat(latent_pieces, dim=1)
+            if len(latent_paths) > 1:
+                messages.append(
+                    f"info: concatenated {len(latent_pieces)}/{len(latent_paths)} reference latents "
+                    f"in input order ({ref_latent.shape[1]} steps before max-length trimming)."
+                )
         else:
-            wav, sr = _load_audio(req.ref_wav)
-            if req.max_ref_seconds is not None and req.max_ref_seconds > 0:
-                max_ref_samples = max(1, int(float(req.max_ref_seconds) * float(sr)))
-                if wav.shape[1] > max_ref_samples:
-                    messages.append(
-                        f"warning: reference audio exceeds max_ref_seconds ({req.max_ref_seconds}s). "
-                        f"Trimming from {float(wav.shape[1]) / float(sr):.2f}s to {float(max_ref_samples) / float(sr):.2f}s."
-                    )
-                    wav = wav[:, :max_ref_samples]
             if req.ref_normalize_db is not None:
                 messages.append(
-                    f"info: reference loudness normalize enabled (target_db={float(req.ref_normalize_db):.2f}, includes peak safety scaling)."
+                    f"info: reference loudness normalize enabled per clip (target_db={float(req.ref_normalize_db):.2f}, includes peak safety scaling)."
                 )
             elif req.ref_ensure_max:
-                messages.append("info: reference peak safety scaling enabled (ensure_max=True).")
-            ref_latent = self.codec.encode_waveform(
-                wav.unsqueeze(0),
-                sample_rate=int(sr),
-                normalize_db=req.ref_normalize_db,
-                ensure_max=bool(req.ref_ensure_max),
-            ).cpu()
+                messages.append(
+                    "info: reference peak safety scaling enabled per clip (ensure_max=True)."
+                )
+            latent_pieces = []
+            for path in wav_paths:
+                wav, sr = _load_audio(path)
+                if len(wav_paths) == 1 and max_ref_seconds > 0:
+                    max_ref_samples = max(1, int(max_ref_seconds * float(sr)))
+                    if wav.shape[1] > max_ref_samples:
+                        messages.append(
+                            f"warning: reference audio exceeds max_ref_seconds ({max_ref_seconds}s). "
+                            f"Trimming from {float(wav.shape[1]) / float(sr):.2f}s to {float(max_ref_samples) / float(sr):.2f}s."
+                        )
+                        wav = wav[:, :max_ref_samples]
+                piece = self.codec.encode_waveform(
+                    wav.unsqueeze(0),
+                    sample_rate=int(sr),
+                    normalize_db=req.ref_normalize_db,
+                    ensure_max=bool(req.ref_ensure_max),
+                ).cpu()
+                if piece.shape[1] == 0:
+                    raise ValueError(f"Reference waveform produced an empty latent: {path}")
+                latent_pieces.append(piece)
+                if (
+                    max_ref_latent_steps is not None
+                    and sum(int(item.shape[1]) for item in latent_pieces)
+                    >= max_ref_latent_steps
+                ):
+                    break
+            ref_latent = torch.cat(latent_pieces, dim=1)
+            if len(wav_paths) > 1:
+                messages.append(
+                    f"info: encoded and concatenated {len(latent_pieces)}/{len(wav_paths)} "
+                    "reference waveforms in input order "
+                    f"({ref_latent.shape[1]} latent steps before max-length trimming)."
+                )
 
         if max_ref_latent_steps is not None and ref_latent.shape[1] > max_ref_latent_steps:
             messages.append(
-                f"warning: reference latent steps ({ref_latent.shape[1]}) exceed max_ref_seconds bound ({max_ref_latent_steps} steps). "
-                "Trimming reference latent."
+                f"warning: combined reference latent steps ({ref_latent.shape[1]}) exceed "
+                f"max_ref_seconds bound ({max_ref_latent_steps} steps). "
+                "Trimming the concatenated reference latent."
             )
             ref_latent = ref_latent[:, :max_ref_latent_steps]
 
@@ -780,9 +955,15 @@ class InferenceRuntime:
                 "info: speaker conditioning is disabled for this checkpoint; ignoring speaker embedding."
             )
             return None, None
-        if req.ref_wav is not None or req.ref_latent is not None or req.no_ref:
+        if (
+            req.ref_wav is not None
+            or req.ref_wavs
+            or req.ref_latent is not None
+            or req.ref_latents
+            or req.no_ref
+        ):
             raise ValueError(
-                "ref_embed/--ref-embed cannot be combined with ref_wav/ref_latent/no_ref. "
+                "ref_embed/--ref-embed cannot be combined with reference inputs or no_ref. "
                 "Use exactly one speaker conditioning source."
             )
 

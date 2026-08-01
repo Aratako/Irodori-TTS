@@ -1,0 +1,109 @@
+# Speaker Inversion training for Irodori-TTS-v4-Small.
+#
+# Usage:
+#   uv run train.py \
+#     --config configs/train_v4_small_speaker_inversion.yaml \
+#     --manifest path/to/manifest.jsonl \
+#     --init-checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+#     --output-dir outputs/speaker_inversion/name
+#
+# The saved embedding can be used with:
+#   uv run infer.py \
+#     --checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+#     --ref-embed outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
+#     --text "読み上げるテキスト" \
+#     --caption "声質やスタイルの記述"
+
+model:
+  latent_dim: 32
+  latent_patch_size: 1
+  text_vocab_size: 102400
+  text_tokenizer_repo: sbintuitions/modernbert-ja-310m
+  text_encoder_revision: 77675fc96a7e445e982e2ba90246b816efc74ec6
+  text_encoder_type: pretrained
+  text_add_bos: true
+  pretrained_projector_type: residual_mlp
+  pretrained_projector_hidden_ratio: 2.0
+  pretrained_projector_dropout: 0.0
+  model_dim: 1280
+  num_layers: 12
+  num_heads: 20
+  mlp_ratio: 2.875
+  speaker_mlp_ratio: 2.6
+  text_dim: 512
+  speaker_dim: 768
+  speaker_layers: 8
+  speaker_heads: 12
+  speaker_patch_size: 4
+  timestep_embed_dim: 512
+  adaln_rank: 192
+  use_caption_condition: true
+  use_speaker_condition: true
+  caption_vocab_size: 102400
+  caption_tokenizer_repo: sbintuitions/modernbert-ja-310m
+  caption_add_bos: true
+  caption_dim: 512
+  use_duration_predictor: true
+  duration_aux_dim: 14
+  duration_hidden_dim: 1024
+  duration_layers: 3
+  duration_dropout: 0.1
+  duration_attention_heads: 8
+  duration_architecture: token_sum_dual_adarn_zero_no_aux
+  duration_token_init_frames: 9.0
+  duration_speaker_fusion: adarn_zero
+  duration_caption_fusion: adarn_zero
+  duration_caption_pooling: masked_mean
+
+train:
+  train_mode: rf
+  speaker_inversion_enabled: true
+  speaker_inversion_tokens: 16
+  speaker_inversion_init_std: 0.02
+  speaker_inversion_init_embedding:
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  num_workers: 8
+  dataloader_persistent_workers: true
+  dataloader_prefetch_factor: 4
+  allow_tf32: true
+  compile_model: false
+  gradient_checkpointing: true
+  precision: bf16
+  optimizer: adamw
+  learning_rate: 0.01
+  weight_decay: 0.0
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 0.00000001
+  lr_scheduler: none
+  max_steps: 3000
+  max_text_len: 256
+  max_caption_len: 512
+  text_condition_dropout: 0.0
+  speaker_condition_dropout: 0.0
+  caption_condition_dropout: 0.0
+  timestep_stratified: true
+  max_latent_steps: 750
+  ref_min_seconds: 1.0
+  ref_max_seconds: 120.0
+  fixed_target_latent_steps:
+  fixed_target_full_mask: false
+  rf_loss_mode: utterance_mean
+  duration_loss_weight: 0.1
+  duration_backprop_to_condition: false
+  duration_speaker_dropout: 0.0
+  duration_caption_dropout: 0.0
+  duration_huber_delta: 0.1
+  log_every: 20
+  save_every: 250
+  checkpoint_best_n: 0
+  valid_ratio: 0.0
+  valid_every: 0
+  wandb_enabled: false
+  wandb_project:
+  wandb_entity:
+  wandb_run_name:
+  wandb_mode: online
+  ddp_find_unused_parameters: false
+  seed: 0

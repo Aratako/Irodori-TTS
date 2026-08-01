@@ -1,7 +1,7 @@
 dacvae @ git+https://github.com/facebookresearch/dacvae
 datasets>=3.0.0
 gradio>=5.0.0
-huggingface-hub>=0.34.0,<1.0
+huggingface-hub>=0.34.0
 llvmlite>=0.40.0
 numba>=0.57.0
 peft>=0.18.0
@@ -13,6 +13,7 @@ silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a5
 torch>=2.10.0
 torchaudio>=2.10.0
 torchcodec>=0.10.0,<0.11.0
-transformers<5
+torchdata>=0.11.0
+transformers>=5.12.1,<6
 tqdm>=4.67.3
 wandb>=0.17.0

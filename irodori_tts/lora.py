@@ -24,6 +24,28 @@ LORA_ADAPTER_STATE_NAMES = ("adapter_model.safetensors", "adapter_model.bin")
 LORA_TRAINER_STATE_NAME = "trainer_state.pt"
 LORA_METADATA_NAME = "irodori_lora_metadata.json"
 
+# Explicit pretrained-backbone support for the published model families. Keep these
+# architecture-specific rather than guessing attention/MLP layers from arbitrary HF models.
+_MODERNBERT_BACKBONE_ATTN_TARGET = (
+    r"pretrained_text_backbone\.backbone\.layers\.\d+\.attn\.(Wqkv|Wo)"
+)
+_MODERNBERT_BACKBONE_MLP_TARGET = r"pretrained_text_backbone\.backbone\.layers\.\d+\.mlp\.(Wi|Wo)"
+_T5GEMMA2_BACKBONE_ATTN_TARGET = (
+    r"pretrained_text_backbone\.backbone\.layers\.\d+\.self_attn\."
+    r"(q_proj|k_proj|v_proj|o_proj)"
+)
+_T5GEMMA2_BACKBONE_MLP_TARGET = (
+    r"pretrained_text_backbone\.backbone\.layers\.\d+\.mlp\."
+    r"(gate_proj|up_proj|down_proj)"
+)
+_PRETRAINED_BACKBONE_ATTN_TARGET = (
+    rf"({_MODERNBERT_BACKBONE_ATTN_TARGET}|{_T5GEMMA2_BACKBONE_ATTN_TARGET})"
+)
+_PRETRAINED_BACKBONE_ATTN_MLP_TARGET = (
+    rf"({_PRETRAINED_BACKBONE_ATTN_TARGET}"
+    rf"|{_MODERNBERT_BACKBONE_MLP_TARGET}|{_T5GEMMA2_BACKBONE_MLP_TARGET})"
+)
+
 LORA_TARGET_PRESETS: dict[str, str] = {
     "text_attn_mlp": (
         r"^text_encoder\.blocks\.\d+\."
@@ -47,11 +69,14 @@ LORA_TARGET_PRESETS: dict[str, str] = {
         r"(attention\.(wq|wk|wv|wo|wk_text|wv_text|wk_speaker|wv_speaker|wk_caption|wv_caption|gate)"
         r"|mlp\.(w1|w2|w3))$"
     ),
+    "pretrained_backbone_attn": rf"^{_PRETRAINED_BACKBONE_ATTN_TARGET}$",
+    "pretrained_backbone_attn_mlp": rf"^{_PRETRAINED_BACKBONE_ATTN_MLP_TARGET}$",
     "all_attn": (
         r"^(text_encoder\.blocks\.\d+\.attention\.(wq|wk|wv|wo|gate)"
         r"|caption_encoder\.blocks\.\d+\.attention\.(wq|wk|wv|wo|gate)"
         r"|speaker_encoder\.blocks\.\d+\.attention\.(wq|wk|wv|wo|gate)"
-        r"|blocks\.\d+\.attention\.(wq|wk|wv|wo|wk_text|wv_text|wk_speaker|wv_speaker|wk_caption|wv_caption|gate))$"
+        r"|blocks\.\d+\.attention\.(wq|wk|wv|wo|wk_text|wv_text|wk_speaker|wv_speaker|wk_caption|wv_caption|gate)"
+        rf"|{_PRETRAINED_BACKBONE_ATTN_TARGET})$"
     ),
     "diffusion_full": (
         r"^(cond_module\.(0|2|4)"
@@ -83,7 +108,8 @@ LORA_TARGET_PRESETS: dict[str, str] = {
         r"(attention\.(wq|wk|wv|wo|gate)|mlp\.(w1|w2|w3))"
         r"|blocks\.\d+\."
         r"(attention\.(wq|wk|wv|wo|wk_text|wv_text|wk_speaker|wv_speaker|wk_caption|wv_caption|gate)"
-        r"|mlp\.(w1|w2|w3)))$"
+        r"|mlp\.(w1|w2|w3))"
+        rf"|{_PRETRAINED_BACKBONE_ATTN_MLP_TARGET})$"
     ),
     "all_linear": (
         r"^(speaker_encoder\.in_proj"
@@ -100,7 +126,8 @@ LORA_TARGET_PRESETS: dict[str, str] = {
         r"(attention\.(wq|wk|wv|wk_text|wv_text|wk_speaker|wv_speaker|wk_caption|wv_caption|gate|wo)"
         r"|mlp\.(w1|w2|w3)"
         r"|attention_adaln\.(shift_down|scale_down|gate_down|shift_up|scale_up|gate_up)"
-        r"|mlp_adaln\.(shift_down|scale_down|gate_down|shift_up|scale_up|gate_up)))$"
+        r"|mlp_adaln\.(shift_down|scale_down|gate_down|shift_up|scale_up|gate_up))"
+        rf"|{_PRETRAINED_BACKBONE_ATTN_MLP_TARGET})$"
     ),
 }
 
@@ -268,11 +295,6 @@ def load_lora_adapter(
         is_trainable=is_trainable,
         torch_device=torch_device,
     )
-
-
-def model_supports_lora_adapters(model: torch.nn.Module) -> bool:
-    _, peft_model_cls, _ = _require_peft()
-    return isinstance(model, peft_model_cls)
 
 
 def count_parameters(model: torch.nn.Module) -> tuple[int, int]:

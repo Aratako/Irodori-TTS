@@ -3,49 +3,6 @@ from collections.abc import Iterable
 import torch
 
 
-class ByteTokenizer:
-    """Simple byte-level tokenizer for text-to-speech."""
-
-    def __init__(self, bos_token: int = 256) -> None:
-        if bos_token < 0:
-            raise ValueError(f"bos_token must be >= 0, got {bos_token}")
-        self.bos_token = int(bos_token)
-
-    @classmethod
-    def for_vocab_size(cls, text_vocab_size: int) -> "ByteTokenizer":
-        if text_vocab_size < 256:
-            raise ValueError(
-                f"text_vocab_size must be >= 256 for byte-level tokenization, got {text_vocab_size}"
-            )
-        # Reserve a dedicated BOS token outside UTF-8 byte range when possible.
-        if text_vocab_size == 256:
-            return cls(bos_token=0)
-        return cls(bos_token=text_vocab_size - 1)
-
-    def encode(self, text: str, add_bos: bool = True) -> torch.Tensor:
-        tokens = list(text.encode("utf-8"))
-        if add_bos:
-            tokens.insert(0, self.bos_token)
-        return torch.tensor(tokens, dtype=torch.long)
-
-    def batch_encode(
-        self,
-        texts: Iterable[str],
-        max_length: int | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        encoded = [self.encode(t) for t in texts]
-        if max_length is None:
-            max_length = max(x.numel() for x in encoded)
-
-        batch = torch.zeros((len(encoded), max_length), dtype=torch.long)
-        mask = torch.zeros((len(encoded), max_length), dtype=torch.bool)
-        for i, seq in enumerate(encoded):
-            n = min(max_length, seq.numel())
-            batch[i, :n] = seq[:n]
-            mask[i, :n] = True
-        return batch, mask
-
-
 class PretrainedTextTokenizer:
     """
     Hugging Face tokenizer wrapper for text conditioning.
@@ -77,6 +34,7 @@ class PretrainedTextTokenizer:
         repo_id: str,
         add_bos: bool = True,
         local_files_only: bool = False,
+        revision: str | None = None,
     ) -> "PretrainedTextTokenizer":
         try:
             from transformers import AutoTokenizer
@@ -91,6 +49,7 @@ class PretrainedTextTokenizer:
             use_fast=True,
             trust_remote_code=False,
             local_files_only=local_files_only,
+            revision=revision,
         )
         return cls(tokenizer=tokenizer, add_bos=add_bos)
 
@@ -124,21 +83,54 @@ class PretrainedTextTokenizer:
         texts: Iterable[str],
         max_length: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        encoded = [self.encode(t) for t in texts]
+        texts = list(texts)
+        if not texts:
+            raise ValueError("texts must contain at least one item.")
         if max_length is None:
+            encoded = [self.encode(t) for t in texts]
             max_length = max(max(x.numel(), 1) for x in encoded)
         if max_length <= 0:
             raise ValueError(f"max_length must be > 0, got {max_length}")
 
+        if self.add_bos:
+            bos_id = self.bos_token_id
+            if bos_id is None:
+                raise ValueError("Tokenizer has no bos_token_id but BOS prepend was requested.")
+            if max_length == 1:
+                batch = torch.full(
+                    (len(texts), 1),
+                    fill_value=int(bos_id),
+                    dtype=torch.long,
+                )
+                mask = torch.ones((len(texts), 1), dtype=torch.bool)
+                return batch, mask
+            body_max_length = max_length - 1
+        else:
+            body_max_length = max_length
+
+        encoded_batch = self.tokenizer(
+            texts,
+            add_special_tokens=False,
+            padding="max_length",
+            truncation=True,
+            max_length=body_max_length,
+            return_tensors="pt",
+            return_attention_mask=True,
+        )
+        body_ids = encoded_batch["input_ids"].to(dtype=torch.long)
+        body_mask = encoded_batch["attention_mask"].to(dtype=torch.bool)
+
+        if not self.add_bos:
+            return body_ids, body_mask
+
         batch = torch.full(
-            (len(encoded), max_length),
+            (len(texts), max_length),
             fill_value=self.pad_token_id,
             dtype=torch.long,
         )
-        mask = torch.zeros((len(encoded), max_length), dtype=torch.bool)
-        for i, seq in enumerate(encoded):
-            n = min(max_length, seq.numel())
-            if n > 0:
-                batch[i, :n] = seq[:n]
-                mask[i, :n] = True
+        mask = torch.zeros((len(texts), max_length), dtype=torch.bool)
+        batch[:, 0] = int(self.bos_token_id)
+        mask[:, 0] = True
+        batch[:, 1:] = body_ids
+        mask[:, 1:] = body_mask
         return batch, mask

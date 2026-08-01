@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import math
 import os
+import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +26,10 @@ from irodori_tts.lora import (
 from irodori_tts.model import TextToLatentRFDiT
 
 CONFIG_META_KEY = "config_json"
-INFERENCE_CONFIG_KEYS = ("max_text_len", "max_caption_len", "fixed_target_latent_steps")
+TEXT_ENCODER_CONFIG_META_KEY = "text_encoder_config_json"
+INFERENCE_INT_CONFIG_KEYS = ("max_text_len", "max_caption_len", "fixed_target_latent_steps")
+INFERENCE_FLOAT_CONFIG_KEYS = ("ref_max_seconds",)
+INFERENCE_CONFIG_KEYS = INFERENCE_INT_CONFIG_KEYS + INFERENCE_FLOAT_CONFIG_KEYS
 
 
 def _default_output_path(input_path: Path) -> Path:
@@ -92,29 +98,106 @@ def _extract_train_config(payload: dict[str, Any]) -> dict[str, Any] | None:
     return train_cfg
 
 
-def _extract_inference_config(payload: dict[str, Any]) -> dict[str, int]:
+def _extract_inference_config(payload: dict[str, Any]) -> dict[str, int | float]:
     raw = _extract_train_config(payload)
     if raw is None:
         return {}
 
-    inference_cfg: dict[str, int] = {}
-    for key in INFERENCE_CONFIG_KEYS:
+    inference_cfg: dict[str, int | float] = {}
+    for key in INFERENCE_INT_CONFIG_KEYS:
         value = raw.get(key)
         if isinstance(value, int):
             inference_cfg[key] = int(value)
+    for key in INFERENCE_FLOAT_CONFIG_KEYS:
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value_float = float(value)
+            if math.isfinite(value_float) and value_float > 0.0:
+                inference_cfg[key] = value_float
     return inference_cfg
 
 
 def _build_flat_config(payload: dict[str, Any]) -> dict[str, Any]:
-    flat_cfg = dict(_extract_model_config(payload))
+    model_cfg = merge_dataclass_overrides(
+        ModelConfig(),
+        _extract_model_config(payload),
+        section="checkpoint model_config",
+    )
+    flat_cfg = asdict(model_cfg)
     flat_cfg.update(_extract_inference_config(payload))
     return flat_cfg
 
 
-def _build_safetensors_metadata(*, flat_config: dict[str, Any]) -> dict[str, str]:
-    return {
+def _load_text_encoder_config(flat_config: dict[str, Any]) -> dict[str, Any] | None:
+    model_config = {k: v for k, v in flat_config.items() if k not in INFERENCE_CONFIG_KEYS}
+    model_cfg = merge_dataclass_overrides(
+        ModelConfig(),
+        model_config,
+        section="checkpoint model_config",
+    )
+    if not model_cfg.use_pretrained_text_encoder:
+        return None
+
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(
+        model_cfg.text_tokenizer_repo,
+        trust_remote_code=False,
+        revision=model_cfg.text_encoder_revision,
+    )
+    return config.to_dict()
+
+
+def _build_safetensors_metadata(
+    *,
+    flat_config: dict[str, Any],
+    text_encoder_config: dict[str, Any] | None,
+) -> dict[str, str]:
+    metadata = {
         CONFIG_META_KEY: json.dumps(flat_config, ensure_ascii=False, separators=(",", ":")),
     }
+    if text_encoder_config is not None:
+        metadata[TEXT_ENCODER_CONFIG_META_KEY] = json.dumps(
+            text_encoder_config,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    return metadata
+
+
+def _export_tokenizer(
+    flat_config: dict[str, Any],
+    output_path: Path,
+    *,
+    source_checkpoint: Path | None = None,
+) -> Path | None:
+    model_config = {k: v for k, v in flat_config.items() if k not in INFERENCE_CONFIG_KEYS}
+    model_cfg = merge_dataclass_overrides(
+        ModelConfig(),
+        model_config,
+        section="checkpoint model_config",
+    )
+    if not model_cfg.use_pretrained_text_encoder:
+        return None
+
+    tokenizer_dir = output_path.parent / "tokenizer"
+    if source_checkpoint is not None:
+        bundled_tokenizer_dir = source_checkpoint.parent / "tokenizer"
+        if (bundled_tokenizer_dir / "tokenizer_config.json").is_file():
+            if bundled_tokenizer_dir.resolve() != tokenizer_dir.resolve():
+                shutil.copytree(bundled_tokenizer_dir, tokenizer_dir, dirs_exist_ok=True)
+            return tokenizer_dir
+
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_cfg.text_tokenizer_repo,
+        use_fast=True,
+        trust_remote_code=False,
+        revision=model_cfg.text_encoder_revision,
+    )
+    tokenizer.save_pretrained(tokenizer_dir)
+    return tokenizer_dir
 
 
 def _load_saved_config(adapter_dir: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -370,13 +453,29 @@ def _load_adapter_checkpoint(
     adapter_dir: Path,
     *,
     base_checkpoint: str | None,
-) -> tuple[dict[str, torch.Tensor], dict[str, Any], bool]:
+) -> tuple[
+    dict[str, torch.Tensor],
+    dict[str, Any],
+    bool,
+    dict[str, Any] | None,
+    Path,
+]:
     model_cfg, train_cfg = _load_saved_config(adapter_dir)
     base_path = _resolve_base_checkpoint(adapter_dir, base_checkpoint)
-    base_state, base_model_cfg, _ = _load_checkpoint_for_inference(base_path)
-    resolved_model_cfg = ModelConfig(**model_cfg)
+    base_state, base_model_cfg, _, base_text_encoder_config = _load_checkpoint_for_inference(
+        base_path
+    )
+    resolved_model_cfg = merge_dataclass_overrides(
+        ModelConfig(),
+        model_cfg,
+        section="adapter model config",
+    )
 
-    model = TextToLatentRFDiT(resolved_model_cfg)
+    model = TextToLatentRFDiT(
+        resolved_model_cfg,
+        pretrained_backbone_config=base_text_encoder_config,
+        load_pretrained_backbone_weights=not resolved_model_cfg.use_pretrained_text_encoder,
+    )
     checkpoint_has_caption = _checkpoint_uses_caption_condition(base_model_cfg, base_state)
     current_has_caption = bool(resolved_model_cfg.use_caption_condition)
     checkpoint_has_duration = _checkpoint_uses_duration_predictor(base_model_cfg, base_state)
@@ -408,7 +507,11 @@ def _load_adapter_checkpoint(
             ),
         )
     else:
-        model.load_state_dict(base_state, strict=True)
+        model.load_state_dict(
+            base_state,
+            strict=True,
+            assign=resolved_model_cfg.use_pretrained_text_encoder,
+        )
 
     if upgrade_caption:
         _initialize_caption_embedding_from_pretrained(model, resolved_model_cfg)
@@ -417,12 +520,18 @@ def _load_adapter_checkpoint(
         raise RuntimeError("Loaded PEFT adapter does not support merge_and_unload().")
     merged = peft_model.merge_and_unload()
 
-    flat_config = dict(model_cfg)
+    flat_config = asdict(resolved_model_cfg)
     if isinstance(train_cfg, dict):
-        for key in INFERENCE_CONFIG_KEYS:
+        for key in INFERENCE_INT_CONFIG_KEYS:
             value = train_cfg.get(key)
             if isinstance(value, int):
                 flat_config[key] = int(value)
+        for key in INFERENCE_FLOAT_CONFIG_KEYS:
+            value = train_cfg.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                value_float = float(value)
+                if math.isfinite(value_float) and value_float > 0.0:
+                    flat_config[key] = value_float
 
     merged_state: dict[str, torch.Tensor] = {}
     for key, value in merged.state_dict().items():
@@ -430,7 +539,7 @@ def _load_adapter_checkpoint(
         if not tensor.is_contiguous():
             tensor = tensor.contiguous()
         merged_state[key] = tensor
-    return merged_state, flat_config, True
+    return merged_state, flat_config, True, base_text_encoder_config, base_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -478,10 +587,13 @@ def main() -> None:
         raise FileExistsError(f"Output already exists: {output_path} (use --force to overwrite)")
 
     if is_lora_adapter_dir(input_path):
-        model_state, flat_config, merged_lora = _load_adapter_checkpoint(
-            input_path,
-            base_checkpoint=args.base_checkpoint,
-        )
+        (
+            model_state,
+            flat_config,
+            merged_lora,
+            text_encoder_config,
+            tokenizer_source_checkpoint,
+        ) = _load_adapter_checkpoint(input_path, base_checkpoint=args.base_checkpoint)
     else:
         payload = _load_checkpoint(input_path)
         raw_model_state = _extract_model_state(payload)
@@ -492,13 +604,26 @@ def main() -> None:
         model_state = raw_model_state
         merged_lora = False
         flat_config = _build_flat_config(payload)
+        raw_text_encoder_config = payload.get("text_encoder_config")
+        if raw_text_encoder_config is not None and not isinstance(raw_text_encoder_config, dict):
+            raise ValueError("Checkpoint text_encoder_config must be a dictionary when present.")
+        text_encoder_config = raw_text_encoder_config
+        tokenizer_source_checkpoint = None
 
+    if text_encoder_config is None:
+        text_encoder_config = _load_text_encoder_config(flat_config)
     metadata = _build_safetensors_metadata(
         flat_config=flat_config,
+        text_encoder_config=text_encoder_config,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_file(model_state, str(output_path), metadata=metadata)
+    tokenizer_dir = _export_tokenizer(
+        flat_config,
+        output_path,
+        source_checkpoint=tokenizer_source_checkpoint,
+    )
 
     total_params = sum(int(t.numel()) for t in model_state.values())
     total_bytes = sum(int(t.numel()) * int(t.element_size()) for t in model_state.values())
@@ -507,6 +632,8 @@ def main() -> None:
     print(f"Tensors: {len(model_state)}")
     print(f"Total params: {total_params:,}")
     print(f"Approx tensor bytes: {total_bytes / (1024**3):.2f} GiB")
+    if tokenizer_dir is not None:
+        print(f"Tokenizer: {tokenizer_dir}")
     if merged_lora:
         print("Merged LoRA adapter weights into the base model before export.")
 

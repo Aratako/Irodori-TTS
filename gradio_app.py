@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
-from huggingface_hub import hf_hub_download
 
 from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
 from irodori_tts.inference_runtime import (
@@ -14,6 +13,7 @@ from irodori_tts.inference_runtime import (
     SamplingRequest,
     clear_cached_runtime,
     default_runtime_device,
+    download_hf_checkpoint,
     get_cached_runtime,
     list_available_runtime_devices,
     list_available_runtime_precisions,
@@ -37,7 +37,7 @@ def _default_checkpoint() -> str:
         ]
     )
     if not candidates:
-        return "Aratako/Irodori-TTS-500M-v3"
+        return "Aratako/Irodori-TTS-v4-Small"
     return str(candidates[-1])
 
 
@@ -109,12 +109,6 @@ def _format_timings(stage_timings: list[tuple[str, float]], total_to_decode: flo
     return "\n".join(lines)
 
 
-def _resolve_ref_wav(uploaded_audio: str | None) -> str | None:
-    if uploaded_audio is not None and str(uploaded_audio).strip() != "":
-        return str(uploaded_audio)
-    return None
-
-
 def _coerce_gradio_file_path(value: object) -> str | None:
     if value is None:
         return None
@@ -132,6 +126,14 @@ def _coerce_gradio_file_path(value: object) -> str | None:
         return str(candidate)
     text = str(value).strip()
     return text or None
+
+
+def _resolve_ref_wavs(uploaded_audio: object) -> list[str]:
+    if uploaded_audio is None:
+        return []
+    values = uploaded_audio if isinstance(uploaded_audio, (list, tuple)) else [uploaded_audio]
+    paths = [_coerce_gradio_file_path(value) for value in values]
+    return [path for path in paths if path is not None]
 
 
 def _resolve_speaker_embedding(
@@ -156,7 +158,7 @@ def _resolve_checkpoint_path(raw_checkpoint: str) -> str:
     if suffix in {".pt", ".safetensors"}:
         return checkpoint
 
-    resolved = hf_hub_download(repo_id=checkpoint, filename="model.safetensors")
+    resolved = download_hf_checkpoint(checkpoint)
     print(f"[gradio] checkpoint: hf://{checkpoint} -> {resolved}", flush=True)
     return str(resolved)
 
@@ -217,7 +219,7 @@ def _run_generation(
     codec_device: str,
     codec_precision: str,
     text: str,
-    uploaded_audio: str | None,
+    uploaded_audio: object,
     uploaded_speaker_embedding: object,
     speaker_embedding_path_raw: str,
     num_steps: int,
@@ -272,14 +274,14 @@ def _run_generation(
     manual_seconds = _parse_optional_float(seconds_raw, "seconds")
     lora_adapter = _parse_optional_str(lora_adapter_raw)
 
-    ref_wav = _resolve_ref_wav(uploaded_audio=uploaded_audio)
+    ref_wavs = _resolve_ref_wavs(uploaded_audio)
     speaker_embedding = _resolve_speaker_embedding(
         uploaded_embedding=uploaded_speaker_embedding,
         speaker_embedding_path_raw=speaker_embedding_path_raw,
     )
-    if ref_wav is not None and speaker_embedding is not None:
+    if ref_wavs and speaker_embedding is not None:
         raise ValueError("Reference audio and speaker embedding are mutually exclusive.")
-    no_ref = ref_wav is None and speaker_embedding is None
+    no_ref = not ref_wavs and speaker_embedding is None
     ref_normalize_db = -16.0
     ref_ensure_max = True
 
@@ -307,11 +309,14 @@ def _run_generation(
     )
     if speaker_embedding is not None:
         stdout_log(f"[gradio] speaker_embedding: {speaker_embedding}")
+    elif ref_wavs:
+        stdout_log(f"[gradio] reference clips: {len(ref_wavs)}")
 
     result = runtime.synthesize(
         SamplingRequest(
             text=str(text),
-            ref_wav=ref_wav,
+            ref_wav=None,
+            ref_wavs=ref_wavs or None,
             ref_latent=None,
             ref_embed=speaker_embedding,
             no_ref=bool(no_ref),
@@ -321,7 +326,7 @@ def _run_generation(
             decode_mode="sequential",
             seconds=manual_seconds,
             duration_scale=float(duration_scale),
-            max_ref_seconds=30.0,
+            max_ref_seconds=None,
             max_text_len=None,
             num_steps=int(num_steps),
             seed=None if seed is None else int(seed),
@@ -395,7 +400,8 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Irodori-TTS Gradio") as demo:
         gr.Markdown("# Irodori-TTS Inference (Cached Runtime)")
         gr.Markdown(
-            "When settings are unchanged, runtime is reused and only sampling/decoding runs."
+            "Reference-audio cloning / Speaker Inversion UI. "
+            "Irodori-TTS-v4-Small is used by default; unchanged settings reuse the cached runtime."
         )
 
         with gr.Row():
@@ -443,9 +449,18 @@ def build_ui() -> gr.Blocks:
             build_emoji_palette(text, open=False)
         with gr.Tabs():
             with gr.Tab("Reference Audio"):
-                uploaded_audio = gr.Audio(
-                    label="Reference Audio Upload (optional)",
+                gr.Markdown(
+                    "**Long-reference tip:** Upload multiple clean, shorter clips from the same "
+                    "speaker and arrange them in the desired order. This matches v4-Small "
+                    "training. A single uninterrupted long recording is accepted but has not "
+                    "been evaluated."
+                )
+                uploaded_audio = gr.File(
+                    label=("Reference Audio Uploads (optional; concatenated in displayed order)"),
                     type="filepath",
+                    file_count="multiple",
+                    file_types=["audio"],
+                    allow_reordering=True,
                 )
             with gr.Tab("Speaker Embedding"):
                 with gr.Row():

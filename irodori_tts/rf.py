@@ -68,11 +68,6 @@ def rf_velocity_target(x0: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
     return noise - x0
 
 
-def rf_predict_x0(x_t: torch.Tensor, v_pred: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    # x_t = x0 + t * v  =>  x0 = x_t - t * v
-    return x_t - t[:, None, None] * v_pred
-
-
 def temporal_score_rescale(
     v_pred: torch.Tensor,
     x_t: torch.Tensor,
