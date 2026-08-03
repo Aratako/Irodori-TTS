@@ -297,36 +297,12 @@ Generated audio is passed through [SilentCipher](https://github.com/sony/silentc
 
 ## Training
 
-### 1. Prepare Manifest (Precompute DACVAE Latents)
+This section describes how to train **Irodori-TTS-v4-Small**. For training instructions
+for previous models, refer to the documentation in the corresponding version tags.
+
+### 1. Prepare the Training Manifest
 
 Encodes audio from a Hugging Face dataset into DACVAE latents and produces a JSONL manifest for training.
-
-```bash
-uv run --no-sync python prepare_manifest.py \
-  --dataset myorg/my_dataset \
-  --split train \
-  --audio-column audio \
-  --text-column text \
-  --output-manifest data/train_manifest.jsonl \
-  --latent-dir data/latents \
-  --device cuda
-```
-
-To include `speaker_id` in the manifest (for speaker-conditioned training):
-
-```bash
-uv run --no-sync python prepare_manifest.py \
-  --dataset myorg/my_dataset \
-  --split train \
-  --audio-column audio \
-  --text-column text \
-  --speaker-column speaker \
-  --output-manifest data/train_manifest.jsonl \
-  --latent-dir data/latents \
-  --device cuda
-```
-
-To include `caption` in the manifest (for caption-conditioned voice design training):
 
 ```bash
 uv run --no-sync python prepare_manifest.py \
@@ -341,14 +317,10 @@ uv run --no-sync python prepare_manifest.py \
   --device cuda
 ```
 
-Speaker/reference labels depend on the training mode:
-
-- For v2 VoiceDesign training, `speaker_id` is optional because the model learns from
-  `text + caption`.
-- For v4-Small training, keep `speaker_id` available so the model can learn from
-  `text + speaker/reference + caption`.
-- For Speaker Inversion training, `speaker_id` is not required because the run learns one
-  shared speaker embedding from the target speaker samples.
+v4-Small learns from text, speaker/reference audio, and captions. Include `speaker_id` and
+`caption` where available so all three conditioning paths can be trained. A Speaker
+Inversion manifest does not require `speaker_id`, because the run learns one shared speaker
+embedding from the target-speaker samples.
 
 The manifest `caption` value may also be a list of strings; training randomly selects one
 non-empty caption each time that row is loaded.
@@ -359,7 +331,7 @@ This produces a JSONL manifest with entries like:
 {"text": "こんにちは", "caption": "落ち着いた、近い距離感の女性話者", "latent_path": "data/latents/00001.pt", "speaker_id": "myorg/my_dataset:speaker_001", "num_frames": 750}
 ```
 
-### 2. Training
+### 2. Train v4-Small
 
 Single-GPU training:
 
@@ -372,77 +344,9 @@ uv run --no-sync python train.py \
 ```
 
 The v4-Small config trains the RF body, duration predictor, and shared pretrained text/caption
-backbone jointly.
-
-Legacy v3 release training uses two phases. First train the body:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v3_phase1_body.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_v3
-```
-
-Then initialize the integrated
-duration predictor from the phase-1 checkpoint:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v3_phase2_duration.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_duration \
-  --init-checkpoint outputs/irodori_tts_v3/checkpoint_final.pt
-```
-
-Legacy v2 VoiceDesign training uses a dedicated config:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v2_voice_design.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_voice_design
-```
-
-`configs/train_500m_v2_voice_design.yaml` sets `use_caption_condition: true` and disables the
-speaker/reference branch. Caption-free configs continue to use speaker conditioning when
-`speaker_id` / reference inputs are available.
-
-Legacy v3 VoiceDesign training uses two phases. Phase 1 initializes the RF/DiT body from the
-v3 base checkpoint while adding the caption branch and skipping the base duration
-predictor:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v3_voice_design_phase1_body.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_voice_design_phase1 \
-  --init-checkpoint path/to/Irodori-TTS-500M-v3.safetensors
-```
-
-Phase 2 adds and trains a newly initialized duration predictor with text + speaker +
-caption conditioning:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v3_voice_design_phase2_duration.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_voice_design_phase2 \
-  --init-checkpoint outputs/irodori_tts_voice_design_phase1/checkpoint_final.pt
-```
-
-The VoiceDesign config also enables `caption_warmup: true` for optional caption-branch warmup.
-`warmup_steps` controls the LR scheduler, while `caption_warmup_steps` controls how long
-non-caption gradients are discarded before normal joint training resumes.
-
-### Legacy v3 Duration Predictor Training
-
-v3 training uses two phases: `configs/train_500m_v3_phase1_body.yaml` trains the
-variable-length DiT body, then `configs/train_500m_v3_phase2_duration.yaml` freezes the
-body and trains the duration predictor.
-
-The duration predictor regresses `log1p(num_frames)` with Huber loss. The current v3 phase2
-config uses the token-sum duration predictor selected from ablations; see the parameter
-guide for the architecture details.
+backbone jointly. The duration predictor regresses `log1p(num_frames)` with Huber loss and
+uses the token-sum architecture selected from ablations. See the parameter guide for its
+architecture details.
 
 Multi-GPU DDP training:
 
@@ -458,7 +362,7 @@ uv run --no-sync torchrun --nproc_per_node 4 train.py \
 Training supports YAML config files with `model` and `train` sections. CLI arguments take precedence over YAML values. See `uv run --no-sync python train.py --help` for all available options.
 For a more detailed explanation of model and training config fields, see [Parameter Guide](docs/parameters.md).
 
-#### Fine-Tuning from Released Weights
+### 3. LoRA Fine-Tuning
 
 Start a new training run from released inference weights (`.safetensors`). This initializes only the model weights; optimizer / scheduler state starts fresh. The duration predictor is kept as part of the saved adapter by default.
 
@@ -474,23 +378,10 @@ The v4-Small LoRA config targets diffusion attention by default and saves the du
 predictor with the adapter. To adapt the shared ModernBERT backbone, select the
 `pretrained_backbone_attn` or `pretrained_backbone_attn_mlp` target preset.
 
-Legacy v3 VoiceDesign LoRA fine-tuning:
-
-```bash
-uv run --no-sync python train.py \
-  --config configs/train_500m_v3_voice_design_lora.yaml \
-  --manifest data/train_manifest.jsonl \
-  --output-dir outputs/irodori_tts_voice_design_lora \
-  --init-checkpoint path/to/Irodori-TTS-600M-v3-VoiceDesign.safetensors
-```
-
-For the older v2 VoiceDesign checkpoint, use `configs/train_500m_v2_voice_design_lora.yaml`
-and initialize from `Irodori-TTS-500M-v2-VoiceDesign.safetensors`.
-
 LoRA target presets, adapter saving behavior, and resume details are covered in the
 [Parameter Guide](docs/parameters.md).
 
-#### Speaker Inversion
+### 4. Speaker Inversion
 
 Speaker Inversion trains only a small set of speaker embedding tokens while keeping the
 base Irodori-TTS model frozen. It is useful when you want a reusable speaker identity
@@ -523,7 +414,7 @@ config or pass `--speaker-inversion-init-embedding path/to/checkpoint.speaker.sa
 Full trainer `--resume` is intentionally not used for Speaker Inversion checkpoints.
 Enable `gradient_checkpointing: true` or pass `--gradient-checkpointing` if GPU memory is tight.
 
-#### Resuming Interrupted Training
+### 5. Resume Interrupted Training
 
 Resume an existing training run from a training checkpoint. Full-model runs use `.pt`; LoRA runs use checkpoint directories. Both restore optimizer, scheduler, and step state.
 
@@ -547,7 +438,7 @@ uv run --no-sync python train.py \
 
 If you move a LoRA checkpoint to another environment and the original base-checkpoint path is no longer valid, pass `--init-checkpoint path/to/base_model.safetensors` together with `--resume` to override the saved base-model path.
 
-### 3. Checkpoint Conversion
+### 6. Convert a Training Checkpoint
 
 Convert a training checkpoint to inference-only safetensors format:
 
@@ -567,40 +458,12 @@ For checkpoints with a pretrained text encoder, conversion also writes a `tokeni
 directory beside the safetensors file and embeds the encoder architecture config in the file.
 Keep the safetensors file and `tokenizer/` directory together when publishing or moving the model.
 
-### 4. TorchAO Quantization
+## Quantization
 
-Convert an inference checkpoint with torchao. INT8 weight-only is the default:
-
-```bash
-uv run --no-sync python quantize_checkpoint.py path/to/model.safetensors \
-  --quantization int8-weight-only \
-  --output path/to/quantized/model.safetensors
-```
-
-Available schemes are `int8-weight-only` (W8A16), `int8-dynamic` (W8A8),
-`int4-weight-only` (W4A16, group size 128 by default), `float8-weight-only` (FP8 weights
-and BF16 activations), and `float8-dynamic` (FP8 weights and activations).
-INT4 weight-only uses the CUDA tinygemm kernel and requires compute capability 8.0 or newer.
-
-The default `core` profile quantizes the attention and MLP weights in the text,
-speaker, and diffusion Transformer blocks. Projectors, AdaLN, duration prediction,
-and the codec remain unquantized. `--profile all-linear` is available for more
-aggressive experimentation. BF16 model inference is recommended:
-
-```bash
-uv run --no-sync python infer.py \
-  --checkpoint path/to/quantized/model.safetensors \
-  --model-precision bf16 \
-  --text "こんにちは、私はAIです。" \
-  --ref-wav path/to/reference.wav \
-  --output-wav outputs/sample_int8.wav
-```
-
-Dynamic `--lora-adapter` inference is supported with quantized base checkpoints.
-Train the adapter against the matching full-precision base model.
-
-To use a pre-quantized model, select the desired quantization variant by appending
-its name to the Hugging Face repo id:
+Quantized variants of Irodori-TTS reduce the memory required by the TTS model during
+inference. Pre-quantized v4-Small checkpoints are available from
+[Aratako/Irodori-TTS-v4-Small-Quantized](https://huggingface.co/Aratako/Irodori-TTS-v4-Small-Quantized).
+Select a variant by appending its subdirectory name to the Hugging Face repository ID:
 
 ```bash
 uv run --no-sync python infer.py \
@@ -611,7 +474,31 @@ uv run --no-sync python infer.py \
   --output-wav outputs/sample_int8.wav
 ```
 
+Available schemes are `int8-weight-only` (W8A16), `int8-dynamic` (W8A8),
+`int4-weight-only` (W4A16, group size 128 by default), `float8-weight-only` (FP8 weights
+and BF16 activations), and `float8-dynamic` (FP8 weights and activations).
+INT4 weight-only uses the CUDA tinygemm kernel and requires compute capability 8.0 or newer.
 Only the selected model variant and its tokenizer assets are downloaded.
+
+`--model-precision bf16` controls the unquantized layers and floating-point activations;
+quantized weights retain their stored quantization format.
+
+To quantize another compatible inference checkpoint locally, use
+`quantize_checkpoint.py`. INT8 weight-only is the default:
+
+```bash
+uv run --no-sync python quantize_checkpoint.py path/to/model.safetensors \
+  --quantization int8-weight-only \
+  --output path/to/quantized/model.safetensors
+```
+
+The default `core` profile quantizes the attention and MLP weights in the text,
+speaker, and diffusion Transformer blocks. Projectors, AdaLN, duration prediction,
+and the codec remain unquantized. `--profile all-linear` is available for more aggressive
+experimentation.
+
+Dynamic `--lora-adapter` inference is supported with quantized base checkpoints.
+Train the adapter against the matching full-precision base model.
 
 ## Project Structure
 
