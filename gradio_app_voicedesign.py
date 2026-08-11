@@ -45,7 +45,7 @@ def _default_checkpoint() -> str:
         return str(preferred[-1])
     if candidates:
         return str(candidates[-1])
-    return "Aratako/Irodori-TTS-v4-Small"
+    return "Aratako/Irodori-TTS-v4.1-Small"
 
 
 def _default_model_device() -> str:

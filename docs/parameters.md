@@ -4,7 +4,7 @@ This document explains the main inference and training parameters used by Irodor
 
 ## Version Notes
 
-`main` targets the unified `Aratako/Irodori-TTS-v4-Small` release. One checkpoint supports
+`main` targets the unified `Aratako/Irodori-TTS-v4.1-Small` release. One checkpoint supports
 text, speaker/reference, and caption conditioning, including multiple reference clips with
 a combined trained limit of 120 seconds.
 
@@ -113,7 +113,7 @@ For lower-latency experiments, try Sway Sampling with fewer steps:
 
 ```bash
 uv run python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --ref-wav path/to/reference.wav \
   --num-steps 6 \

@@ -37,7 +37,7 @@ def _default_checkpoint() -> str:
         ]
     )
     if not candidates:
-        return "Aratako/Irodori-TTS-v4-Small"
+        return "Aratako/Irodori-TTS-v4.1-Small"
     return str(candidates[-1])
 
 

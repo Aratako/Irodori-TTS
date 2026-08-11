@@ -1,7 +1,7 @@
 # Irodori-TTS
 
-[![Model](https://img.shields.io/badge/Model-HuggingFace-yellow)](https://huggingface.co/Aratako/Irodori-TTS-v4-Small)
-[![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Space-blue)](https://huggingface.co/spaces/Aratako/Irodori-TTS-v4-Small-Demo)
+[![Model](https://img.shields.io/badge/Model-HuggingFace-yellow)](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small)
+[![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Space-blue)](https://huggingface.co/spaces/Aratako/Irodori-TTS-v4.1-Small-Demo)
 [![License: MIT](https://img.shields.io/badge/Code%20License-MIT-green.svg)](LICENSE)
 
 Training and inference code for **Irodori-TTS**, a Flow Matching-based Text-to-Speech model. The architecture and training design largely follow [Echo-TTS](https://jordandarefsky.com/blog/2025/echo/), using [DACVAE](https://github.com/facebookresearch/dacvae) continuous latents as the generation target.
@@ -9,12 +9,12 @@ Training and inference code for **Irodori-TTS**, a Flow Matching-based Text-to-S
 For an OpenAI-compatible inference API server, see [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server).
 
 > [!IMPORTANT]
-> `main` tracks the **v4** codebase and is intended for use with the unified **Irodori-TTS-v4-Small** release.
+> `main` tracks the **v4** codebase and is intended for use with the unified **Irodori-TTS-v4.1-Small** release.
 > The current code remains backward-compatible with the released v2/v3 base and VoiceDesign checkpoints.
 > Previous codebase states are available through the `v3`, `v2`, and `v1` tags.
 > v1 checkpoints / preprocessing are not compatible with v2/v3/v4.
 
-For model weights and audio samples, please refer to the [Irodori-TTS-v4-Small model card](https://huggingface.co/Aratako/Irodori-TTS-v4-Small).
+For model weights and audio samples, please refer to the [Irodori-TTS-v4.1-Small model card](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small).
 
 ## Features
 
@@ -32,7 +32,7 @@ For model weights and audio samples, please refer to the [Irodori-TTS-v4-Small m
 
 ## Architecture
 
-The current release, **`Aratako/Irodori-TTS-v4-Small`**, unifies the previous base and
+The current release, **`Aratako/Irodori-TTS-v4.1-Small`**, unifies the previous base and
 VoiceDesign families in one checkpoint. It supports 3-branch conditioning from text,
 reference speech, and caption text. Released v2/v3 checkpoints remain supported for inference.
 
@@ -91,7 +91,7 @@ path. This was validated with AMD GPU inference.
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --ref-wav path/to/reference.wav \
   --output-wav outputs/sample.wav
@@ -101,7 +101,7 @@ uv run --no-sync python infer.py \
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --no-ref \
   --output-wav outputs/sample.wav
@@ -113,7 +113,7 @@ Pure VoiceDesign from text + caption:
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --caption "落ち着いた女性の声で、近い距離感でやわらかく自然に読み上げてください。" \
   --no-ref \
@@ -124,7 +124,7 @@ Style-controlled voice cloning with text + reference speech + caption:
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "どうしてもっと早く教えてくれなかったの？私、ずっと待ってたのに。" \
   --ref-wav path/to/reference.wav \
   --caption "深く傷つき、今にも泣き出しそうな様子。声が震えており、悲痛なトーンで弱々しく話す。" \
@@ -135,7 +135,7 @@ Long-reference checkpoints can concatenate multiple reference clips in the speci
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "複数の参照音声を使って合成します。" \
   --caption "落ち着いた自然な声" \
   --ref-wavs ref_01.wav ref_02.wav ref_03.wav \
@@ -158,7 +158,7 @@ Use a learned Speaker Inversion embedding instead of reference audio:
 
 ```bash
 uv run --no-sync python infer.py \
-  --checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+  --checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors \
   --ref-embed path/to/my.speaker.safetensors \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --output-wav outputs/sample_speaker_inversion.wav
@@ -171,7 +171,7 @@ uv run --no-sync python gradio_app.py --server-name 0.0.0.0 --server-port 7860
 ```
 
 Then access the UI at `http://localhost:7860`.
-The hosted v4-Small demo is available at [Aratako/Irodori-TTS-v4-Small-Demo](https://huggingface.co/spaces/Aratako/Irodori-TTS-v4-Small-Demo).
+The hosted v4-Small demo is available at [Aratako/Irodori-TTS-v4.1-Small-Demo](https://huggingface.co/spaces/Aratako/Irodori-TTS-v4.1-Small-Demo).
 The reference input area accepts one or more audio files, which can be reordered before
 generation and are concatenated in the displayed order. For long-reference cloning, upload
 multiple clean, shorter clips from the same speaker; this matches v4-Small training. A single
@@ -186,7 +186,7 @@ uv run --no-sync python gradio_app_voicedesign.py --server-name 0.0.0.0 --server
 
 The same hosted v4-Small demo supports VoiceDesign and reference-audio conditioning.
 
-Both UIs default to `Aratako/Irodori-TTS-v4-Small`. `gradio_app_voicedesign.py` exposes
+Both UIs default to `Aratako/Irodori-TTS-v4.1-Small`. `gradio_app_voicedesign.py` exposes
 caption conditioning, while `gradio_app.py` includes the Speaker Inversion input.
 
 ## Inference
@@ -195,7 +195,7 @@ caption conditioning, while `gradio_app.py` includes the Speaker Inversion input
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --ref-wav path/to/reference.wav \
   --output-wav outputs/sample.wav
@@ -217,7 +217,7 @@ caption only by passing `--no-ref`, or with both reference speech and caption by
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --caption "落ち着いた、近い距離感の女性話者" \
   --no-ref \
@@ -226,7 +226,7 @@ uv run --no-sync python infer.py \
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "あははっ🤭、それ本当に言ってるの？…😮‍💨まぁ、君らしいけどね。" \
   --caption "余裕のある大人の男性。親しい相手に対して、くだけた雰囲気で呆れながらも楽しそうに話している。" \
   --ref-wav path/to/reference.wav \
@@ -253,7 +253,7 @@ it is mutually exclusive with `--ref-wav`, `--ref-latent`, and `--no-ref`.
 
 ```bash
 uv run --no-sync python infer.py \
-  --checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+  --checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors \
   --ref-embed outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
   --text "こんにちは、私はAIです。これはSpeaker Inversion推論のテストです。" \
   --output-wav outputs/sample_speaker_inversion.wav
@@ -279,7 +279,7 @@ steps:
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small \
   --text "こんにちは、私はAIです。これは音声合成のテストです。" \
   --ref-wav path/to/reference.wav \
   --num-steps 6 \
@@ -297,7 +297,7 @@ Generated audio is passed through [SilentCipher](https://github.com/sony/silentc
 
 ## Training
 
-This section describes how to train **Irodori-TTS-v4-Small**. For training instructions
+This section describes how to train **Irodori-TTS-v4.1-Small**. For training instructions
 for previous models, refer to the documentation in the corresponding version tags.
 
 ### 1. Prepare the Training Manifest
@@ -340,7 +340,7 @@ uv run --no-sync python train.py \
   --config configs/train_v4_small.yaml \
   --manifest data/train_manifest.jsonl \
   --output-dir outputs/irodori_tts \
-  --init-checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors
+  --init-checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors
 ```
 
 The v4-Small config trains the RF body, duration predictor, and shared pretrained text/caption
@@ -355,7 +355,7 @@ uv run --no-sync torchrun --nproc_per_node 4 train.py \
   --config configs/train_v4_small.yaml \
   --manifest data/train_manifest.jsonl \
   --output-dir outputs/irodori_tts \
-  --init-checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+  --init-checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors \
   --device cuda
 ```
 
@@ -371,7 +371,7 @@ uv run --no-sync python train.py \
   --config configs/train_v4_small_lora.yaml \
   --manifest data/train_manifest.jsonl \
   --output-dir outputs/irodori_tts_lora \
-  --init-checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors
+  --init-checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors
 ```
 
 The v4-Small LoRA config targets diffusion attention by default and saves the duration
@@ -393,7 +393,7 @@ Prepare a manifest from the target speaker's audio, then initialize from v4-Smal
 uv run --no-sync python train.py \
   --config configs/train_v4_small_speaker_inversion.yaml \
   --manifest data/target_speaker_manifest.jsonl \
-  --init-checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+  --init-checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors \
   --output-dir outputs/speaker_inversion/name
 ```
 
@@ -403,7 +403,7 @@ with the base model during inference:
 
 ```bash
 uv run --no-sync python infer.py \
-  --checkpoint path/to/Irodori-TTS-v4-Small/model.safetensors \
+  --checkpoint path/to/Irodori-TTS-v4.1-Small/model.safetensors \
   --ref-embed outputs/speaker_inversion/name/checkpoint_final.speaker.safetensors \
   --text "こんにちは、これは学習した話者埋め込みを使った推論です。" \
   --output-wav outputs/sample_speaker_inversion.wav
@@ -462,12 +462,12 @@ Keep the safetensors file and `tokenizer/` directory together when publishing or
 
 Quantized variants of Irodori-TTS reduce the memory required by the TTS model during
 inference. Pre-quantized v4-Small checkpoints are available from
-[Aratako/Irodori-TTS-v4-Small-Quantized](https://huggingface.co/Aratako/Irodori-TTS-v4-Small-Quantized).
+[Aratako/Irodori-TTS-v4.1-Small-Quantized](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small-Quantized).
 Select a variant by appending its subdirectory name to the Hugging Face repository ID:
 
 ```bash
 uv run --no-sync python infer.py \
-  --hf-checkpoint Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only \
+  --hf-checkpoint Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-weight-only \
   --model-precision bf16 \
   --text "こんにちは、私はAIです。" \
   --no-ref \
@@ -552,7 +552,7 @@ Irodori-TTS/
 ## License
 
 - **Code**: [MIT License](LICENSE)
-- **Model Weights**: Please refer to the [Irodori-TTS-v4-Small model card](https://huggingface.co/Aratako/Irodori-TTS-v4-Small) for licensing details
+- **Model Weights**: Please refer to the [Irodori-TTS-v4.1-Small model card](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small) for licensing details
 
 ## Acknowledgments
 
