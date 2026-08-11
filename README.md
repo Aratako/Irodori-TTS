@@ -16,6 +16,81 @@ For an OpenAI-compatible inference API server, see [Irodori-TTS-Server](https://
 
 For model weights and audio samples, please refer to the [Irodori-TTS-v4-Small model card](https://huggingface.co/Aratako/Irodori-TTS-v4-Small).
 
+> [!NOTE]
+> ## Local ROCm (gfx1200) patches
+>
+> This clone carries a few local changes on top of upstream, made while getting this
+> running well on an AMD Radeon RX 9060 XT (gfx1200) via ROCm 7.2.4. Everything below
+> is additive; nothing upstream was removed.
+>
+> ### 1. Fixed a ~700 second `model.to(device)` stall (`irodori_tts/inference_runtime.py`)
+>
+> **Symptom:** loading a checkpoint (`InferenceRuntime.from_key`) took ~705 seconds,
+> reproducing deterministically (5/5 runs, ±0.5s) whenever the checkpoint is loaded
+> with `load_state_dict(..., assign=True)` — i.e. whenever `use_pretrained_text_encoder`
+> is set, or the checkpoint is a torchao-quantized one (int8/int4).
+>
+> **Root cause:** tensors returned by `safetensors.torch.load_file(path, device="cpu")`
+> use a zero-copy storage. Moving *those specific tensor objects* to a ROCm CUDA device
+> with `.to(device)` is catastrophically slow on this GPU/driver combination — confirmed
+> to take ~1s per tensor regardless of tensor size (714 params ≈ 705s), and confirmed to
+> be independent of *how* `.to(device)` is invoked (inside `Module._apply()`/`Module.to()`,
+> or directly in a plain Python loop over the state dict — both reproduce the same total
+> delay). Synthetic tensors created with `torch.empty()`/`torch.randn()` never show this;
+> only tensors that came out of `load_file()` do.
+>
+> **Fix:** when `assign=True` will be used, each state-dict tensor is first `.clone()`d
+> into ordinary (non-safetensors-backed) CPU storage, *then* moved to the target device,
+> *then* assigned as the model's parameter. This sidesteps the slow path entirely and
+> works for both plain checkpoints and torchao-quantized ones (torchao's quantized
+> tensor subclasses support `.clone()` fine). Net effect on this GPU: ~705s → ~1.5s for
+> this step; end-to-end checkpoint load dropped from ~717s to ~10s.
+>
+> This is scoped to `model_device.type != "cpu"`, so CPU inference is unaffected.
+>
+> ### 2. `--no-watermark` CLI flag (`infer.py`, `irodori_tts/inference_runtime.py`)
+>
+> SilentCipher watermarking (`silentcipher_watermark` stage) was found to be the single
+> largest contributor to per-request latency once the above load-time fix and
+> `MIOPEN_FIND_MODE=FAST` (see below) were both in place — roughly half of total
+> generation time — and it also drives peak VRAM up by ~0.9 GB (3.04 GB → 2.14 GB
+> without it, measured on the int8-weight-only checkpoint). `InferenceRuntime` gained a
+> `watermark_enabled` attribute (defaults to `True`, preserving upstream behavior);
+> passing `--no-watermark` on the CLI sets it to `False` and skips the watermarking
+> step while still generating audio normally. The watermark model is still loaded (no
+> change there), only the per-request encode step is skipped.
+>
+> ### 3. Optional load-timing instrumentation (`irodori_tts/inference_runtime.py`)
+>
+> `InferenceRuntime.from_key` now prints a per-stage breakdown (checkpoint load, model
+> construction, `load_state_dict`, `model.to(device)`, dtype cast, tokenizer setup,
+> codec load) when the `IRODORI_TTS_DEBUG_LOAD=1` environment variable is set. This is
+> what made it possible to isolate `model.to(model_device)` as the sole ~705s
+> contributor in the first place, and is left in for future troubleshooting. **Disabled
+> by default** — it only runs when that environment variable is explicitly set to `1`.
+>
+> ### Recommended flags on this GPU
+>
+> MIOpen on gfx1200 has no shipped tuning database (`/opt/rocm*/share/miopen/db` has
+> entries for gfx803 through gfx1030, nothing for gfx11xx/gfx12xx yet), so the default
+> MIOpen "Normal" find mode does a slow, from-scratch solver search on every new
+> convolution shape used by the DACVAE codec decoder (tens to ~130s on this GPU).
+> `MIOPEN_FIND_MODE=FAST` skips that search; the codec's `decode_latent` step drops
+> from ~30-130s to ~0.3s with it set. This does not change which solver is ultimately
+> selected (`GemmFwdRest` either way) — it changes whether MIOpen benchmarks candidate
+> configs on real hardware first or picks one via static analysis.
+>
+> ```bash
+> MIOPEN_FIND_MODE=FAST uv run --no-sync python infer.py \
+>   --hf-checkpoint Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only \
+>   --model-precision bf16 --codec-precision bf16 --no-watermark \
+>   --text "..." --ref-wav path/to/reference.wav --output-wav outputs/out.wav
+> ```
+>
+> With both fixes and these flags, on an RX 9060 XT: end-to-end cold start to generated
+> audio is ~13s (down from ~717s), of which DiT sampling is ~1.6s and codec decode is
+> ~0.3s, using ~3.0 GB VRAM (int8-weight-only checkpoint).
+
 ## Features
 
 - **Flow Matching TTS**: Rectified Flow Diffusion Transformer (RF-DiT) over continuous DACVAE latents

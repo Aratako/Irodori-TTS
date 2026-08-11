@@ -617,6 +617,7 @@ class InferenceRuntime:
         self.default_caption_max_len = default_caption_max_len
         self.default_max_ref_seconds = float(default_max_ref_seconds)
         self.watermarker = SilentCipherWatermarker(device=str(self.codec_device))
+        self.watermark_enabled = True
         self._infer_lock = threading.Lock()
         self._model_dtype = next(self.model.parameters()).dtype
         self._lora_adapter_names: dict[str, str] = {}
@@ -634,34 +635,66 @@ class InferenceRuntime:
             device=codec_device,
         )
 
+        import os
+        import time
+
+        _debug_load = os.environ.get("IRODORI_TTS_DEBUG_LOAD") == "1"
+
+        def _mark(label: str, t_prev: float) -> float:
+            if _debug_load:
+                if model_device.type == "cuda":
+                    torch.cuda.synchronize()
+                t_now = time.perf_counter()
+                print(f"[load-timing] {label}: {t_now - t_prev:.3f}s", flush=True)
+                return t_now
+            return t_prev
+
+        _t = time.perf_counter()
+
         checkpoint_path = Path(key.checkpoint)
         model_state, model_cfg_dict, train_cfg, text_encoder_config = (
             _load_checkpoint_for_inference(checkpoint_path)
         )
+        _t = _mark("_load_checkpoint_for_inference", _t)
         model_cfg = merge_dataclass_overrides(
             ModelConfig(),
             model_cfg_dict,
             section="checkpoint model_config",
         )
+        _t = _mark("merge_dataclass_overrides", _t)
 
         model = TextToLatentRFDiT(
             model_cfg,
             pretrained_backbone_config=text_encoder_config,
             load_pretrained_backbone_weights=not model_cfg.use_pretrained_text_encoder,
         )
+        _t = _mark("TextToLatentRFDiT construction", _t)
         quantized_model = is_torchao_quantized_state_dict(model_state)
+        assign = model_cfg.use_pretrained_text_encoder or quantized_model
+        if assign and model_device.type != "cpu":
+            # Tensors returned by safetensors.torch.load_file(..., device="cpu") share
+            # zero-copy storage that is catastrophically slow (100s of seconds) to move
+            # to a ROCm device via .to(device), whether that happens inside
+            # Module.to()/_apply or directly. Cloning into ordinary CPU storage first
+            # avoids that path entirely; the loaded tensors are then moved to the
+            # target device before being assigned as the model's parameters.
+            model_state = {k: v.clone().to(model_device) for k, v in model_state.items()}
         model.load_state_dict(
             model_state,
-            assign=model_cfg.use_pretrained_text_encoder or quantized_model,
+            assign=assign,
         )
+        _t = _mark("model.load_state_dict", _t)
         model = model.to(model_device)
+        _t = _mark("model.to(model_device)", _t)
         model = _move_inference_module(model, device=model_device, dtype=model_dtype)
+        _t = _mark("_move_inference_module (dtype cast)", _t)
         model.eval()
         model = _maybe_compile_inference_model(
             model,
             enabled=bool(key.compile_model),
             dynamic=bool(key.compile_dynamic),
         )
+        _t = _mark("_maybe_compile_inference_model", _t)
 
         text_tokenizer_source, text_tokenizer_is_local = _resolve_tokenizer_source(
             checkpoint_path,
@@ -717,6 +750,7 @@ class InferenceRuntime:
             else:
                 default_caption_max_len = default_text_max_len
 
+        _t = _mark("tokenizer setup", _t)
         codec = DACVAECodec.load(
             repo_id=key.codec_repo,
             device=str(codec_device),
@@ -724,6 +758,7 @@ class InferenceRuntime:
             deterministic_encode=bool(key.codec_deterministic_encode),
             deterministic_decode=bool(key.codec_deterministic_decode),
         )
+        _t = _mark("DACVAECodec.load", _t)
         if model_cfg.latent_dim != codec.latent_dim:
             raise ValueError(
                 f"Latent dimension mismatch: checkpoint latent_dim={model_cfg.latent_dim} but codec latent_dim={codec.latent_dim}. "
@@ -1430,7 +1465,7 @@ class InferenceRuntime:
             stage_timings.append(("decode_latent", stage_sec))
             _log(f"[runtime] decode_latent ({decode_mode}): {stage_sec * 1000.0:.1f} ms")
 
-            if self.watermarker.ready:
+            if self.watermarker.ready and self.watermark_enabled:
                 t0 = _measure_start(self.codec_device)
                 trimmed_audios = self.watermarker.encode_batch(
                     trimmed_audios,

@@ -390,6 +390,11 @@ def main() -> None:
             "text+caption-only inference even when the checkpoint supports speaker conditioning."
         ),
     )
+    parser.add_argument(
+        "--no-watermark",
+        action="store_true",
+        help="Skip SilentCipher watermarking of the generated audio.",
+    )
     args = parser.parse_args()
 
     checkpoint_path = _resolve_checkpoint_path(args)
@@ -408,6 +413,8 @@ def main() -> None:
             compile_dynamic=bool(args.compile_dynamic),
         )
     )
+    if args.no_watermark:
+        runtime.watermark_enabled = False
     if runtime.model_cfg.use_speaker_condition_resolved and not (
         args.no_ref
         or args.ref_wav is not None
