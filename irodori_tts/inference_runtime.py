@@ -103,6 +103,25 @@ def list_available_runtime_precisions(device: str | torch.device) -> list[str]:
     return ["fp32"]
 
 
+def release_accelerator_cache(device: str | torch.device | None = None) -> None:
+    """Return cached allocator blocks after a request so a long-running server stays flat.
+
+    PyTorch's MPS caching allocator keeps freed blocks resident in the process. On Apple
+    Silicon that memory is unified with the host, so a resident Gradio server grows by
+    several GB over successive generations (observed 9 GB -> 19 GB on a Mac mini M4 Pro)
+    until the OS starts compressing/swapping. Emptying the cache after each generation
+    keeps the footprint flat (7.6 GB across repeated generations) with no measurable
+    slowdown. CUDA is intentionally left untouched: its cache lives in dedicated VRAM
+    and emptying it per request only adds re-allocation cost.
+    """
+    gc.collect()
+    if not _is_mps_available():
+        return
+    if device is not None and resolve_runtime_device(device).type != "mps":
+        return
+    torch.mps.empty_cache()
+
+
 def _sync_device(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
