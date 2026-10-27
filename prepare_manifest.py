@@ -557,6 +557,7 @@ def _run_worker(
     written = 0
     seen = 0
     skip_counts: dict[str, int] = {}
+    dataset_iter_error_logged = False
     rank_prefix = f"[rank {rank}/{world_size}] " if world_size > 1 else ""
     rank_width = max(2, len(str(world_size - 1)))
     show_progress = bool(args.progress) and (world_size == 1 or args.progress_all or rank == 0)
@@ -619,7 +620,7 @@ def _run_worker(
             print(message)
 
     def _handle_item(item: _PreparedItem, *, stop_requested: bool, out_f) -> None:
-        nonlocal seen, written
+        nonlocal seen, written, dataset_iter_error_logged
         seen += 1
         if show_progress:
             pbar.update(1)
@@ -629,7 +630,11 @@ def _run_worker(
             _log_progress()
             return
         if item.status == "error":
-            _inc_skip(item.skip_reason or "prepare_error")
+            reason = item.skip_reason or "prepare_error"
+            if reason == "dataset_iter_error" and item.error and not dataset_iter_error_logged:
+                print(f"{rank_prefix}dataset iteration error (first occurrence): {item.error}")
+                dataset_iter_error_logged = True
+            _inc_skip(reason)
             _log_progress()
             return
         if stop_requested:
