@@ -1510,6 +1510,30 @@ def _resolve_bundled_tokenizer_source(checkpoint_path: Path) -> Path | None:
     return None
 
 
+def _exported_condition_checkpoint(
+    *, init_checkpoint: str | None, resume: str | None, base_init: object
+) -> tuple[Path, dict[str, object]] | None:
+    """The checkpoint a run starts from and its embedded text encoder config, if it was
+    exported with its tokenizer and config."""
+    if init_checkpoint is not None:
+        checkpoint = _normalize_checkpoint_path(init_checkpoint)
+    elif resume is not None:
+        checkpoint = _normalize_checkpoint_path(resume)
+    elif (
+        isinstance(base_init, dict)
+        and base_init.get("mode") == "checkpoint"
+        and isinstance(base_init.get("checkpoint_path"), str)
+        and base_init["checkpoint_path"]
+    ):
+        checkpoint = _normalize_checkpoint_path(base_init["checkpoint_path"])
+    else:
+        return None
+    if not (checkpoint.parent / "tokenizer" / "tokenizer_config.json").is_file():
+        return None
+    config = _load_embedded_text_encoder_config(checkpoint)
+    return None if config is None else (checkpoint, config)
+
+
 def _load_embedded_text_encoder_config(checkpoint_path: Path) -> dict[str, object] | None:
     """Read condition-backbone config without materializing checkpoint weights."""
     if checkpoint_path.suffix.lower() == ".safetensors":
@@ -3663,10 +3687,20 @@ def main() -> None:
     condition_asset_cfg = model_cfg
     embedded_condition_config = None
     condition_assets_are_local = False
+    condition_checkpoint = None
     if train_cfg.train_mode == "meanflow_distill":
         condition_checkpoint = _normalize_checkpoint_path(train_cfg.teacher_checkpoint)
-        bundled_tokenizer = _resolve_bundled_tokenizer_source(condition_checkpoint)
         embedded_condition_config = _load_embedded_text_encoder_config(condition_checkpoint)
+    else:
+        exported = _exported_condition_checkpoint(
+            init_checkpoint=args.init_checkpoint,
+            resume=None if train_config_uses_lora(train_cfg) else args.resume,
+            base_init=resume_base_init,
+        )
+        if exported is not None:
+            condition_checkpoint, embedded_condition_config = exported
+    if condition_checkpoint is not None:
+        bundled_tokenizer = _resolve_bundled_tokenizer_source(condition_checkpoint)
         if bundled_tokenizer is not None:
             condition_asset_cfg = replace(
                 model_cfg,
