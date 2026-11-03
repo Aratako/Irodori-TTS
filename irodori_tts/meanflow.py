@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -505,8 +506,13 @@ def sample_euler_meanflow(
     seed: int = 0,
     latent_mask: torch.Tensor | None = None,
     initial_noise: torch.Tensor | None = None,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> torch.Tensor:
-    """Linear MeanFlow sampler from Irodori time 1 to 0 (default: 4 NFE)."""
+    """Linear MeanFlow sampler from Irodori time 1 to 0 (default: 4 NFE).
+
+    step_callback, when given, is called as (completed_steps, num_steps) before each step and
+    once after the last one. An exception it raises aborts sampling.
+    """
     if str(model.cfg.flow_parameterization).strip().lower() != "meanflow":
         raise ValueError("sample_euler_meanflow requires a MeanFlow model.")
     if num_steps <= 0:
@@ -545,6 +551,8 @@ def sample_euler_meanflow(
     )
     schedule = torch.linspace(1.0, 0.0, num_steps + 1, device=device, dtype=torch.float32)
     for index in range(num_steps):
+        if step_callback is not None:
+            step_callback(index, num_steps)
         t_value = schedule[index]
         next_value = schedule[index + 1]
         t_vec = t_value.expand(batch_size)
@@ -563,4 +571,6 @@ def sample_euler_meanflow(
             context_kv_cache=context_kv_cache,
         )
         x_t = x_t + velocity * (next_value - t_value)
+    if step_callback is not None:
+        step_callback(num_steps, num_steps)
     return x_t

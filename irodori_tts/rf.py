@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 
@@ -159,9 +160,13 @@ def sample_euler_rf_cfg(
     sway_coeff: float = -1.0,
     latent_mask: torch.Tensor | None = None,
     initial_noise: torch.Tensor | None = None,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> torch.Tensor:
     """
     Euler sampling over RF ODE with text/reference/caption conditioning CFG.
+
+    step_callback, when given, is called as (completed_steps, num_steps) before each step and
+    once after the last one. An exception it raises aborts sampling.
 
     Returns:
       latent sequence in patched space, shape (B, sequence_length, patched_latent_dim)
@@ -479,6 +484,8 @@ def sample_euler_rf_cfg(
     speaker_kv_active = speaker_kv_scale is not None
 
     for i in range(num_steps):
+        if step_callback is not None:
+            step_callback(i, num_steps)
         t = t_schedule[i]
         t_next = t_schedule[i + 1]
         tt = torch.full((batch_size,), t, device=device, dtype=dtype)
@@ -608,4 +615,6 @@ def sample_euler_rf_cfg(
 
         x_t = x_t + v * (t_next - t)
 
+    if step_callback is not None:
+        step_callback(num_steps, num_steps)
     return x_t
