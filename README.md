@@ -573,3 +573,9 @@ This project builds upon the following works:
   howpublished = {\url{https://github.com/Aratako/Irodori-TTS}}
 }
 ```
+
+## Sponsors
+
+Thank you to our sponsors for supporting the development of Irodori-TTS!
+
+- [オナカユル](https://github.com/onaka-yurusugi)
