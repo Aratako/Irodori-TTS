@@ -17,6 +17,7 @@ from irodori_tts.inference_runtime import (
     get_cached_runtime,
     list_available_runtime_devices,
     list_available_runtime_precisions,
+    release_accelerator_cache,
     save_wav,
 )
 from irodori_tts.speaker_inversion import is_speaker_inversion_safetensors_path
@@ -379,6 +380,7 @@ def _run_generation(
     detail_text = "\n".join(detail_lines)
     timing_text = _format_timings(result.stage_timings, result.total_to_decode)
     stdout_log(f"[gradio] saved {len(out_paths)} candidates")
+    release_accelerator_cache(model_device)
 
     audio_updates: list[object] = []
     for i in range(MAX_GRADIO_CANDIDATES):
