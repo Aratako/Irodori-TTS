@@ -579,3 +579,4 @@ This project builds upon the following works:
 Thank you to our sponsors for supporting the development of Irodori-TTS!
 
 - [オナカユル](https://github.com/onaka-yurusugi)
+- [黒神](https://github.com/kokushin)
