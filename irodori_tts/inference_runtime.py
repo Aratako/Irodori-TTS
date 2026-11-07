@@ -299,6 +299,15 @@ def batch_compatibility_key(req: SamplingRequest) -> tuple | None:
     )
 
 
+_TRAILING_PUNCT = "。．.！!？?…‥、,〜~」』）)"
+
+
+def _is_trailing_punct(token: str) -> bool:
+    """A token made only of sentence-final punctuation (SentencePiece's ▁ ignored)."""
+    text = token.replace("▁", "")
+    return bool(text) and all(ch in _TRAILING_PUNCT for ch in text)
+
+
 @dataclass
 class _RequestPlan:
     req: SamplingRequest
@@ -1149,6 +1158,25 @@ class InferenceRuntime:
     ) -> SamplingResult:
         return self.synthesize_batch([req], log_fn=log_fn)[0]
 
+    def _duration_tokens(
+        self, ids: torch.Tensor, mask: torch.Tensor, token_frames: torch.Tensor
+    ) -> dict:
+        """Predicted frames of each text token of the first candidate, for length_check.py.
+
+        ``frames``: one value per non-padding token (BOS included).
+        ``content_frames``: their sum without the BOS and the punctuation-only tokens that end the
+        text. Those edge tokens carry the silence before and after the speech in the training data
+        (the BOS alone adds about 0.85 s), so the content sum is how long the words themselves take.
+        """
+        n = int(mask[0].sum())
+        frames = [float(x) for x in token_frames[0, :n].detach().float().cpu()]
+        tokens = self.tokenizer.tokenizer.convert_ids_to_tokens([int(x) for x in ids[0, :n]])
+        start = 1 if self.tokenizer.add_bos else 0
+        end = n
+        while end > start and _is_trailing_punct(tokens[end - 1]):
+            end -= 1
+        return {"frames": frames, "content_frames": float(sum(frames[start:end]))}
+
     def synthesize_batch(
         self,
         requests: Sequence[SamplingRequest],
@@ -1161,6 +1189,8 @@ class InferenceRuntime:
 
         if not requests:
             raise ValueError("synthesize_batch requires at least one request.")
+        # Per-token duration prediction of the (last) request; see _duration_tokens.
+        self.last_duration_tokens = None
         if len(requests) > 1:
             first_key = batch_compatibility_key(requests[0])
             if first_key is None:
@@ -1621,6 +1651,10 @@ class InferenceRuntime:
                 speaker_mask_override=speaker_mask_override,
                 speaker_uncond_mode=req.speaker_uncond_mode,
             )
+            token_sum = (
+                getattr(self.model.duration_predictor, "token_out_proj", None) is not None
+                and duration_text_state.shape[1] == text_ids.shape[1]
+            )
             pred_log_frames = self.model.predict_duration_log_frames(
                 text_state=duration_text_state,
                 text_mask=duration_text_mask,
@@ -1638,7 +1672,11 @@ class InferenceRuntime:
                 )
                 if self.model_cfg.use_caption_condition
                 else None,
+                return_token_frames=token_sum,
             )
+            if token_sum:
+                pred_log_frames, token_frames = pred_log_frames
+                self.last_duration_tokens = self._duration_tokens(text_ids, text_mask, token_frames)
             pred_frames = torch.expm1(pred_log_frames).float().mean().item()
             scaled_frames = pred_frames * duration_scale
             min_frames = max(1, math.ceil(min_seconds * self.codec.sample_rate / hop_length))

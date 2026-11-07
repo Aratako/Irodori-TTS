@@ -339,6 +339,17 @@ def main() -> None:
         help="Sampling seed. If omitted, a random seed is generated per request.",
     )
     parser.add_argument(
+        "--length-check",
+        choices=("on", "off"),
+        default="off",
+        help=(
+            "Two-pass synthesis (see irodori_tts/length_check.py). When the duration prediction is "
+            "longer than the text needs, measure where the model finished reading from the first pass's "
+            "attention and re-synthesize with the same seed at that length. RF v4.1-Small only; "
+            "ignored when --seconds is given or with more than one candidate."
+        ),
+    )
+    parser.add_argument(
         "--trim-tail",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -453,7 +464,16 @@ def main() -> None:
     for msg in scale_messages:
         print(msg)
 
-    result = runtime.synthesize(
+    synthesize = runtime.synthesize
+    if args.length_check == "on":
+        from irodori_tts import length_check
+
+        def synthesize(request, log_fn=None):
+            result, info = length_check.synthesize(runtime, request, log_fn=log_fn)
+            print(f"[length_check] {info}")
+            return result
+
+    result = synthesize(
         SamplingRequest(
             text=str(args.text),
             caption=None if args.caption is None else str(args.caption),
