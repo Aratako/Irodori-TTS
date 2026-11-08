@@ -71,6 +71,9 @@ FINAL_PUNCT = "。．.！!？?…‥、,〜~」』）)"
 PUNCT_COST = 0.25
 RETRIES = 1
 RETRY_GROWTH = 1.25
+# Sampling steps when the request leaves num_steps unset. Must match the runtime's default for RF
+# models (InferenceRuntime.synthesize_batch).
+DEFAULT_RF_STEPS = 40
 
 
 def supported(model_cfg) -> bool:
@@ -285,7 +288,10 @@ def synthesize(runtime, request, log_fn=None):
             return None, first_frames, estimate
         return estimate, first_frames, estimate
 
-    steps = int(request.num_steps) if request.num_steps else None
+    # The last DiT call of the first pass is call number `steps` (one call per step, see
+    # single_call_per_step). An unset num_steps must resolve to the runtime's default, or the check
+    # never fires there and an overlong first pass is decoded only to be thrown away.
+    steps = int(request.num_steps) if request.num_steps else DEFAULT_RF_STEPS
 
     def at_last_call(recorder):
         if recorder.calls == steps:
