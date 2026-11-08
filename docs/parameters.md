@@ -100,7 +100,8 @@ When the predicted duration is longer than the text needs (often for short sente
 rest with words that are not in the text or by reading part of it again. `--length-check on`
 reads from the first pass's attention where the reading ended, and re-synthesizes with the
 same seed at that length when the first pass is at least 10% too long. It applies to RF
-checkpoints with the v4.1-Small architecture, with one candidate and without `--seconds`;
+checkpoints with the v4.1-Small architecture, with the default `independent` CFG mode, one
+candidate and without `--seconds`;
 a re-synthesized line takes about twice as long. Details are in
 `irodori_tts/length_check.py`.
 

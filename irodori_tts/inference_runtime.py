@@ -1167,6 +1167,8 @@ class InferenceRuntime:
         ``content_frames``: their sum without the BOS and the punctuation-only tokens that end the
         text. Those edge tokens carry the silence before and after the speech in the training data
         (the BOS alone adds about 0.85 s), so the content sum is how long the words themselves take.
+        ``last_token``: the last token of the normalized text, which tells whether it ends with
+        punctuation.
         """
         n = int(mask[0].sum())
         frames = [float(x) for x in token_frames[0, :n].detach().float().cpu()]
@@ -1175,7 +1177,11 @@ class InferenceRuntime:
         end = n
         while end > start and _is_trailing_punct(tokens[end - 1]):
             end -= 1
-        return {"frames": frames, "content_frames": float(sum(frames[start:end]))}
+        return {
+            "frames": frames,
+            "content_frames": float(sum(frames[start:end])),
+            "last_token": tokens[-1] if tokens else None,
+        }
 
     def synthesize_batch(
         self,

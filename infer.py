@@ -345,8 +345,8 @@ def main() -> None:
         help=(
             "Two-pass synthesis (see irodori_tts/length_check.py). When the duration prediction is "
             "longer than the text needs, measure where the model finished reading from the first pass's "
-            "attention and re-synthesize with the same seed at that length. RF v4.1-Small only; "
-            "ignored when --seconds is given or with more than one candidate."
+            "attention and re-synthesize with the same seed at that length. RF v4.1-Small with "
+            "independent CFG only; ignored when --seconds is given or with more than one candidate."
         ),
     )
     parser.add_argument(

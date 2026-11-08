@@ -29,7 +29,9 @@ and when the first pass is clearly longer, synthesize again with the same seed a
 
 The pointer heads are a property of the trained weights, so this only runs on RF models with the
 v4.1 Small architecture (12 layers, 20 heads, width 1280, including fine-tunes); other models are
-synthesized once as usual.
+synthesized once as usual. It also needs the independent CFG mode (the default), which makes one DiT
+call per sampling step with the conditional row first; joint and alternating CFG make a separate
+unconditional call, so the call count no longer marks the last step.
 
 Measured with v4.1 Small (FP32, 40 steps, no reference, Haas-ja-v1.0 + jacer kana CER):
 488 takes of 61 sentences that often get extra speech at the end: speech after the text (5+ kana)
@@ -64,7 +66,7 @@ ABSORB_COST = 1.0
 DIST_CAP = 3.0
 # Cost per token skipped by the path (advancing by one token is free).
 SKIP_COST = 2.0
-# Texts ending in one of these end with a punctuation token; frames pointing at it are weak evidence.
+# A final token made only of these is punctuation; frames pointing at it are weak evidence.
 FINAL_PUNCT = "。．.！!？?…‥、,〜~」』）)"
 PUNCT_COST = 0.25
 RETRIES = 1
@@ -123,6 +125,37 @@ class PointerRecorder:
 
 def ends_with_punct(text: str | None) -> bool:
     return bool(text) and text.rstrip()[-1:] in FINAL_PUNCT
+
+
+def is_punct_token(token: str | None) -> bool:
+    """The token (without the "▁" space marker) is punctuation only."""
+    t = (token or "").replace("▁", "")
+    return bool(t) and all(ch in FINAL_PUNCT for ch in t)
+
+
+def last_token_is_punct(text: str | None, tokens: dict | None = None) -> bool:
+    """Whether the last token of the synthesized text is punctuation.
+
+    The runtime normalizes the text before tokenizing it (outer brackets are removed, 〜 becomes ー,
+    ...), so the last character of the original text can be wrong: 「今日はいい天気です」 ends with
+    「す」, not with a closing bracket. Uses the last token kept by the runtime (``duration_tokens``),
+    or else the normalized text.
+    """
+    if tokens is not None and tokens.get("last_token") is not None:
+        return is_punct_token(tokens["last_token"])
+    if not text:
+        return False
+    from .text_normalization import normalize_text
+
+    return ends_with_punct(normalize_text(text).strip())
+
+
+def single_call_per_step(request) -> bool:
+    """Independent CFG (the default) makes one DiT call per step, conditional row first. Joint and
+    alternating CFG also make an unconditional call per step, which would be counted as a step and
+    overwrite the pointer (with an empty text in joint mode)."""
+    mode = getattr(request, "cfg_guidance_mode", None) or "independent"
+    return str(mode).strip().lower() == "independent"
 
 
 def reading_end(pointer, text_len: int, final_punct: bool = False) -> int | None:
@@ -194,9 +227,10 @@ def estimated_frames(pointer, text_len: int, frames_per_step: int, frames_per_se
                      text: str | None = None, tokens: dict | None = None) -> int | None:
     """Latent frames needed to finish reading (with margin), or None if the reading never ends.
     With ``tokens`` (duration_tokens): reach of the last word + its predicted frames (the last two
-    tokens when the text does not end with punctuation) + LAST_WORD_TAIL_SECONDS, at least FLOOR times
-    the predicted frames of the words. Without: reach + TAIL_SECONDS."""
-    punct = ends_with_punct(text)
+    tokens when the last token is not punctuation, see ``last_token_is_punct``) +
+    LAST_WORD_TAIL_SECONDS, at least FLOOR times the predicted frames of the words.
+    Without: reach + TAIL_SECONDS."""
+    punct = last_token_is_punct(text, tokens)
     end = reading_end(pointer, text_len, punct)
     if end is None:
         return None
@@ -220,9 +254,9 @@ class _Stop(Exception):
 def synthesize(runtime, request, log_fn=None):
     """Two-pass synthesis. Returns (result, info). Without a second pass the first result is returned.
 
-    Skipped (one normal pass) when ``request.seconds`` is given, the model is not supported, or more
-    than one candidate is requested (the pointer is read from the first candidate only, and a length
-    chosen for it could cut the others).
+    Skipped (one normal pass) when ``request.seconds`` is given, the model is not supported, the CFG
+    mode is not independent (``single_call_per_step``), or more than one candidate is requested (the
+    pointer is read from the first candidate only, and a length chosen for it could cut the others).
     The seed is fixed before the first pass (random if unset) so the second pass starts from the same
     noise. When the last DiT call of the first pass shows that it is too long, the first pass stops
     there without decoding. If the second pass does not finish reading (checked at its last call,
@@ -234,6 +268,7 @@ def synthesize(runtime, request, log_fn=None):
 
     info = {"length_check": "skipped"}
     if (request.seconds is not None or not supported(runtime.model_cfg)
+            or not single_call_per_step(request)
             or int(getattr(request, "num_candidates", 1) or 1) != 1):
         return runtime.synthesize(request, log_fn=log_fn), info
     sample_rate = int(runtime.codec.sample_rate)
@@ -280,7 +315,8 @@ def synthesize(runtime, request, log_fn=None):
     log(f"[length_check] {first_frames} -> {frames} frames "
         f"({first_frames / fps:.2f}s -> {frames / fps:.2f}s)")
     last_call = recorder.calls
-    punct = ends_with_punct(request.text)
+    # Decided from the first pass's tokens (the runtime drops them at the start of each synthesis).
+    punct = last_token_is_punct(request.text, getattr(runtime, "last_duration_tokens", None))
 
     def verify(rec):
         if rec.calls == last_call and reading_end(rec.pointer, rec.text_len, punct) is None:

@@ -532,8 +532,9 @@ def build_ui() -> gr.Blocks:
                     info=(
                         "When the predicted duration is longer than the reading needs (extra speech or "
                         "repetition at the end), measure where the reading ends and re-synthesize with "
-                        "the same seed. v4.1-Small (RF) only; ignored when Seconds is set or Num "
-                        "Candidates > 1. A re-synthesized line takes about twice as long."
+                        "the same seed. v4.1-Small (RF) with independent CFG only; ignored when "
+                        "Seconds is set or Num Candidates > 1. A re-synthesized line takes about "
+                        "twice as long."
                     ),
                 )
 
