@@ -80,6 +80,7 @@ speaker reference is reused many times.
 |-----------|---------|-------|
 | `--seconds` | `None` | Manual output duration. If set, it always overrides the default duration behavior. |
 | `--duration-scale` | `1.0` | Multiplies the predicted duration when duration prediction is used. Values above `1.0` produce longer audio; values below `1.0` produce shorter audio. |
+| `--length-check` | `off` | `on`: two-pass synthesis for an overlong predicted duration (see below). Also available as "Length Check (two-pass)" in `gradio_app.py`. |
 
 The recommended duration behavior depends on the checkpoint:
 
@@ -93,6 +94,16 @@ The recommended duration behavior depends on the checkpoint:
 When `--seconds` is omitted, the runtime checks whether the loaded checkpoint has
 duration-predictor weights. If it does, the predicted frame count is used and then scaled
 by `--duration-scale`. If it does not, the runtime falls back to 30 seconds.
+
+When the predicted duration is longer than the text needs (often for short sentences, or with
+`--duration-scale` above `1.0`), the model finishes reading at its usual pace and fills the
+rest with words that are not in the text or by reading part of it again. `--length-check on`
+reads from the first pass's attention where the reading ended, and re-synthesizes with the
+same seed at that length when the first pass is at least 10% too long. It applies to RF
+checkpoints with the v4.1-Small architecture, with the default `independent` CFG mode, one
+candidate and without `--seconds`;
+a re-synthesized line takes about twice as long. Details are in
+`irodori_tts/length_check.py`.
 
 ### Sampling and Candidate Generation
 

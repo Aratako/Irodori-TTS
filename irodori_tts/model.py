@@ -1302,7 +1302,11 @@ class DurationPredictor(nn.Module):
         caption_state: torch.Tensor | None = None,
         caption_mask: torch.Tensor | None = None,
         has_caption: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_token_frames: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """With ``return_token_frames`` (token-sum architectures only), also return the predicted
+        frames of each text token, shape (B, S), zero on padding. The other architectures ignore it
+        and return only the duration, so callers check for ``token_out_proj`` first."""
         if text_state.ndim != 3 or text_state.shape[-1] != self.text_dim:
             raise ValueError(
                 f"text_state must have shape (B, S, {self.text_dim}), got {tuple(text_state.shape)}"
@@ -1375,9 +1379,9 @@ class DurationPredictor(nn.Module):
             for block in self.token_blocks:
                 h = block(h, cond=speaker_vec, caption_cond=caption_vec)
             token_logits = self.token_out_proj(self.token_out_norm(h)).squeeze(-1)
-            token_frames = F.softplus(token_logits.float())
-            total_frames = (token_frames * text_mask.to(dtype=token_frames.dtype)).sum(dim=1)
-            return torch.log1p(total_frames.clamp_min(0.0))
+            token_frames = F.softplus(token_logits.float()) * text_mask.to(dtype=torch.float32)
+            log_frames = torch.log1p(token_frames.sum(dim=1).clamp_min(0.0))
+            return (log_frames, token_frames) if return_token_frames else log_frames
 
         if self.text_pool is None:
             raise RuntimeError("Pooled duration modules are missing.")
@@ -2186,7 +2190,9 @@ class TextToLatentRFDiT(nn.Module):
         caption_mask: torch.Tensor | None = None,
         has_caption: torch.Tensor | None = None,
         detach_condition: bool = True,
-    ) -> torch.Tensor:
+        return_token_frames: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """return_token_frames: return (log frames, per-token frames); token-sum predictors only."""
         if self.duration_predictor is None:
             raise RuntimeError("Duration predictor is disabled for this model.")
         if duration_features.ndim != 2:
@@ -2218,7 +2224,11 @@ class TextToLatentRFDiT(nn.Module):
             caption_state=duration_caption_state,
             caption_mask=caption_mask,
             has_caption=has_caption,
+            **({"return_token_frames": True} if return_token_frames else {}),
         )
+        if return_token_frames:
+            log_frames, token_frames = pred
+            return log_frames.float(), token_frames.float()
         return pred.float()
 
     @property

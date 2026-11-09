@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
 
+from irodori_tts import length_check
 from irodori_tts.gradio_emoji_palette import EMOJI_PALETTE_CSS, build_emoji_palette
 from irodori_tts.inference_runtime import (
     RuntimeKey,
@@ -244,6 +246,7 @@ def _run_generation(
     speaker_kv_min_t_raw: str,
     speaker_kv_max_layers_raw: str,
     lora_adapter_raw: str,
+    length_check_enabled: bool = False,
 ) -> tuple[object, ...]:
     def stdout_log(msg: str) -> None:
         print(msg, flush=True)
@@ -317,7 +320,17 @@ def _run_generation(
     elif ref_wavs:
         stdout_log(f"[gradio] reference clips: {len(ref_wavs)}")
 
-    result = runtime.synthesize(
+    synthesize = runtime.synthesize
+    length_check_info: dict | None = None
+    if length_check_enabled:
+
+        def synthesize(request, log_fn=None):
+            nonlocal length_check_info
+            result, length_check_info = length_check.synthesize(runtime, request, log_fn=log_fn)
+            return result
+
+    t_generate = time.perf_counter()
+    result = synthesize(
         SamplingRequest(
             text=str(text),
             ref_wav=None,
@@ -355,6 +368,7 @@ def _run_generation(
         ),
         log_fn=stdout_log,
     )
+    generate_sec = time.perf_counter() - t_generate
 
     out_dir = Path("gradio_outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -373,6 +387,11 @@ def _run_generation(
         runtime_msg,
         f"seed_used: {result.used_seed}",
         f"candidates: {len(result.audios)}",
+        *(
+            [f"length_check: {length_check_info} (total {generate_sec:.2f}s)"]
+            if length_check_info is not None
+            else []
+        ),
         *[f"saved[{i}]: {path}" for i, path in enumerate(out_paths, start=1)],
         *result.messages,
     ]
@@ -507,6 +526,19 @@ def build_ui() -> gr.Blocks:
                 )
 
             with gr.Row():
+                length_check_enabled = gr.Checkbox(
+                    label="Length Check (two-pass)",
+                    value=False,
+                    info=(
+                        "When the predicted duration is longer than the reading needs (extra speech or "
+                        "repetition at the end), measure where the reading ends and re-synthesize with "
+                        "the same seed. v4.1-Small (RF) with independent CFG only; ignored when "
+                        "Seconds is set or Num Candidates > 1. A re-synthesized line takes about "
+                        "twice as long."
+                    ),
+                )
+
+            with gr.Row():
                 t_schedule_mode = gr.Dropdown(
                     label="Time Schedule",
                     choices=["linear", "sway"],
@@ -618,6 +650,7 @@ def build_ui() -> gr.Blocks:
                 speaker_kv_min_t_raw,
                 speaker_kv_max_layers_raw,
                 lora_adapter_raw,
+                length_check_enabled,
             ],
             outputs=[*out_audios, out_log, out_timing],
         )
