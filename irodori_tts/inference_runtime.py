@@ -1155,8 +1155,9 @@ class InferenceRuntime:
         req: SamplingRequest,
         *,
         log_fn: Callable[[str], None] | None = None,
+        step_callback: Callable[[int, int], None] | None = None,
     ) -> SamplingResult:
-        return self.synthesize_batch([req], log_fn=log_fn)[0]
+        return self.synthesize_batch([req], log_fn=log_fn, step_callback=step_callback)[0]
 
     def _duration_tokens(
         self, ids: torch.Tensor, mask: torch.Tensor, token_frames: torch.Tensor
@@ -1188,6 +1189,7 @@ class InferenceRuntime:
         requests: Sequence[SamplingRequest],
         *,
         log_fn: Callable[[str], None] | None = None,
+        step_callback: Callable[[int, int], None] | None = None,
     ) -> list[SamplingResult]:
         def _log(msg: str) -> None:
             if log_fn is not None:
@@ -1290,6 +1292,7 @@ class InferenceRuntime:
                     speaker_mask_override=speaker_mask_override,
                     speaker_uncond_mode=first.req.speaker_uncond_mode,
                     num_steps=first.num_steps,
+                    step_callback=step_callback,
                     **batch_kwargs,
                 )
             else:
@@ -1320,6 +1323,7 @@ class InferenceRuntime:
                     speaker_kv_min_t=first.speaker_kv_min_t,
                     t_schedule_mode=str(first.req.t_schedule_mode),
                     sway_coeff=float(first.req.sway_coeff),
+                    step_callback=step_callback,
                     **batch_kwargs,
                 )
             stage_sec = _measure_end(self.model_device, t0)
